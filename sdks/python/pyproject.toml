@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yeetpost"
+version = "2.6.0"
+description = "Python client for the yeetpost API. No runtime dependencies."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://yeetpost.com"
+Documentation = "https://api.yeetpost.com/api/v2/openapi.json"
+
+[tool.setuptools]
+py-modules = ["yeetpost"]

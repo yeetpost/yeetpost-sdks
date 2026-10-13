@@ -1,0 +1,37 @@
+{
+  "name": "yeetpost",
+  "version": "2.6.0",
+  "description": "Node client and CLI for the yeetpost API. No runtime dependencies.",
+  "type": "module",
+  "main": "./dist/yeetpost.js",
+  "types": "./dist/yeetpost.d.ts",
+  "bin": {
+    "yeetpost": "./dist/cli.js"
+  },
+  "files": [
+    "dist/yeetpost.js",
+    "dist/yeetpost.d.ts",
+    "dist/cli.js",
+    "dist/cli.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/yeetpost.test.ts src/cli.test.ts"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.2",
+    "@types/node": "^20.11.17",
+    "typescript": "^5.8.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yeetpost/yeetpost-sdks.git",
+    "directory": "sdks/node"
+  },
+  "license": "MIT"
+}

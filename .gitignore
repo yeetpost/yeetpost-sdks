@@ -1,0 +1,11 @@
+node_modules/
+vendor/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.phpunit.cache/
+.phpunit.result.cache
+*.egg-info/
+build/
+.DS_Store
