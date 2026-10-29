@@ -12,6 +12,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://yeetpost.com"
+Repository = "https://github.com/yeetpost/yeetpost-sdks"
 Documentation = "https://api.yeetpost.com/api/v2/openapi.json"
 
 [tool.setuptools]

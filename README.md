@@ -1,14 +1,14 @@
 # yeetpost SDKs
 
-[yeetpost](https://yeetpost.com) is an API for posting to LinkedIn, X, Bluesky, Discord, Telegram, Mastodon, Reddit, Facebook, Instagram, Threads and Google Business Profile. These are the official client libraries. API docs: https://yeetpost.com/docs
+Official clients for the [yeetpost API](https://yeetpost.com/docs). MIT licensed.
 
-| Language | Path | Install | Docs |
-|---|---|---|---|
-| Go | [sdks/go](sdks/go) | `go get github.com/yeetpost/yeetpost-sdks/sdks/go` | [README](sdks/go/README.md) |
-| Node | [sdks/node](sdks/node) | `cd sdks/node && yarn install && yarn build` | [README](sdks/node/README.md) |
-| Python | [sdks/python](sdks/python) | `pip install ./sdks/python` | [README](sdks/python/README.md) |
-| PHP | [sdks/php](sdks/php) | Not on Packagist yet. From source: `composer config repositories.yeetpost path ./sdks/php && composer require yeetpost/yeetpost` | [README](sdks/php/README.md) |
+| Language | Install                                           | Docs                       |
+| -------- | ------------------------------------------------- | -------------------------- |
+| Node     | `npm install yeetpost`                            | [sdks/node](sdks/node)     |
+| Python   | `pip install yeetpost`                            | [sdks/python](sdks/python) |
+| Go       | `go get github.com/yeetpost/yeetpost-sdks/sdks/go` | [sdks/go](sdks/go)         |
+| PHP      | `composer require yeetpost/yeetpost`              | [sdks/php](sdks/php) |
 
-Each SDK is a thin, hand-written client with no runtime dependencies.
+Full API documentation: https://yeetpost.com/docs
 
-License: MIT
+This repo is synced from the private yeetpost monorepo. Open issues here; changes land via the sync.

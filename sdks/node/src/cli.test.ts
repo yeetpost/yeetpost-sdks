@@ -163,7 +163,7 @@ beforeEach(() => {
 // Help and version
 //
 
-test("--help lists the ten commands", async () => {
+test("--help lists the commands", async () => {
   const result = await runCli(["--help"]);
 
   assert.equal(result.code, 0);
@@ -179,6 +179,16 @@ test("--help lists the ten commands", async () => {
     "post:cancel",
     "media:upload",
     "webhooks",
+    "sources",
+    "sources:preview",
+    "sources:create",
+    "sources:get",
+    "sources:update",
+    "sources:delete",
+    "sources:check",
+    "sources:items",
+    "sources:push",
+    "sources:retry",
   ];
 
   for (const commandName of commandNames) {
@@ -1247,20 +1257,10 @@ test("posts puts its filters in the query string", async () => {
   );
 });
 
-test("posts --connection narrows the page the api answered", async () => {
+test("posts --connection asks the api for one connection's posts", async () => {
   writeConfig("yp_secret_abcdef0123");
   setStubResponse(200, {
     posts: [
-      {
-        id: "6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10",
-        connectionSlug: "linkedin",
-        text: "one",
-        status: "sent",
-        url: null,
-        scheduledFor: null,
-        createdAt: "2026-08-26T09:24:11.412Z",
-        error: null,
-      },
       {
         id: "0b7e4a52-9f0c-4a1c-8b3a-6d2f5b1c0e44",
         connectionSlug: "x",
@@ -1274,12 +1274,63 @@ test("posts --connection narrows the page the api answered", async () => {
     ],
     limit: 25,
     offset: 0,
+    total: 1,
+    hasMore: false,
+    nextOffset: null,
   });
 
   const result = await runCli(["posts", "--connection", "x", "--quiet"]);
 
   assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].url, "/api/v2/posts?connectionSlug=x");
   assert.equal(result.stdout, "0b7e4a52-9f0c-4a1c-8b3a-6d2f5b1c0e44\n");
+});
+
+test("posts --created-after, --created-before, --sort and --offset go on the query string", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, {
+    posts: [],
+    limit: 25,
+    offset: 25,
+    total: 40,
+    hasMore: true,
+    nextOffset: 50,
+  });
+
+  const result = await runCli([
+    "posts",
+    "--created-after",
+    "2026-09-01T00:00:00Z",
+    "--created-before",
+    "2026-09-30T00:00:00Z",
+    "--sort",
+    "created_asc",
+    "--offset",
+    "25",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(
+    recordedRequests[0].url,
+    "/api/v2/posts?createdAfter=2026-09-01T00%3A00%3A00Z&createdBefore=2026-09-30T00%3A00%3A00Z&sort=created_asc&offset=25",
+  );
+  assert.deepEqual(JSON.parse(result.stdout), {
+    posts: [],
+    limit: 25,
+    offset: 25,
+    total: 40,
+    hasMore: true,
+    nextOffset: 50,
+  });
+});
+
+test("a bad --sort is refused before the request goes out", async () => {
+  writeConfig("yp_secret_abcdef0123");
+
+  const result = await runCli(["posts", "--sort", "newest"]);
+
+  assert.equal(result.code, 2);
+  assert.equal(recordedRequests.length, 0);
 });
 
 test("a bad --status is refused before the request goes out", async () => {
@@ -1532,6 +1583,374 @@ test("webhooks lists the endpoints", async () => {
   assert.equal(
     JSON.parse(result.stdout).webhooks[0].id,
     "2c9a4f3b-77d1-4b0e-9f2a-8c3e1a5b7d90",
+  );
+});
+
+//
+// sources
+//
+
+const SOURCE_ID = "7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33";
+const SOURCE_ITEM_ID = "2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42";
+
+const herizonSource = {
+  id: SOURCE_ID,
+  slug: "herizon-io",
+  name: "Herizon courses",
+  url: "https://herizon.io/courses.xml",
+  kind: "feed",
+  resolvedUrl: null,
+  profileId: null,
+  connectionSlugs: ["herizon_linkedin"],
+  mode: "queue",
+  instructions: "",
+  makeCard: true,
+  status: "active",
+  lastCheckedAt: null,
+  nextCheckAt: "2026-10-27T10:00:00.000Z",
+  lastError: null,
+  itemCounts: {
+    baseline: 3,
+    new: 0,
+    writing: 0,
+    posted: 0,
+    failed: 0,
+    skipped: 0,
+  },
+  pushUrl: null,
+  createdAt: "2026-10-27T09:00:00.000Z",
+};
+
+test("sources lists the sources with their paging", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { sources: [herizonSource], limit: 5, offset: 0 });
+
+  const result = await runCli(["sources", "--limit", "5", "--quiet"]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources?limit=5");
+  assert.equal(result.stdout, `${SOURCE_ID}\n`);
+});
+
+test("sources:preview prints what a link would post", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  const preview = {
+    kind: "feed",
+    name: "Herizon courses",
+    resolvedUrl: null,
+    itemCount: 0,
+    items: [],
+  };
+  setStubResponse(200, preview);
+
+  const result = await runCli([
+    "sources:preview",
+    "https://herizon.io/courses.xml",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources/preview");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    url: "https://herizon.io/courses.xml",
+  });
+  assert.deepEqual(JSON.parse(result.stdout), preview);
+});
+
+test("sources preview is the same command written with a space", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, {
+    kind: "feed",
+    name: "Herizon courses",
+    resolvedUrl: null,
+    itemCount: 0,
+    items: [],
+  });
+
+  const result = await runCli([
+    "sources",
+    "preview",
+    "https://herizon.io/courses.xml",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].url, "/api/v2/sources/preview");
+});
+
+test("sources:create sends the link, connections, mode and options", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { source: herizonSource });
+
+  const result = await runCli([
+    "sources:create",
+    "https://herizon.io/courses.xml",
+    "--to",
+    "herizon_linkedin,herizon_x",
+    "--mode",
+    "queue",
+    "--instructions",
+    "one post per course",
+    "--no-card",
+    "--backfill",
+    "2",
+    "--quiet",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    url: "https://herizon.io/courses.xml",
+    connectionSlugs: ["herizon_linkedin", "herizon_x"],
+    mode: "queue",
+    instructions: "one post per course",
+    makeCard: false,
+    backfillCount: 2,
+  });
+  assert.equal(result.stdout, `${SOURCE_ID}\n`);
+});
+
+test("sources:create --push makes a push source", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { source: { ...herizonSource, kind: "push" } });
+
+  const result = await runCli([
+    "sources:create",
+    "--push",
+    "--to",
+    "herizon_linkedin",
+    "--mode",
+    "draft",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    kind: "push",
+    connectionSlugs: ["herizon_linkedin"],
+    mode: "draft",
+  });
+});
+
+test("sources:create without a link, connections or a valid mode is a usage error", async () => {
+  writeConfig("yp_secret_abcdef0123");
+
+  const noLink = await runCli([
+    "sources:create",
+    "--to",
+    "a",
+    "--mode",
+    "queue",
+  ]);
+  const noConnections = await runCli([
+    "sources:create",
+    "https://herizon.io/courses.xml",
+    "--mode",
+    "queue",
+  ]);
+  const badMode = await runCli([
+    "sources:create",
+    "https://herizon.io/courses.xml",
+    "--to",
+    "a",
+    "--mode",
+    "now",
+  ]);
+
+  assert.equal(noLink.code, 2);
+  assert.equal(noConnections.code, 2);
+  assert.equal(badMode.code, 2);
+  assert.equal(
+    badMode.stderr.includes("--mode must be one of queue, draft"),
+    true,
+  );
+  assert.equal(recordedRequests.length, 0);
+});
+
+test("sources:get prints one source", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { source: herizonSource });
+
+  const result = await runCli(["sources:get", SOURCE_ID]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${SOURCE_ID}`);
+  assert.deepEqual(JSON.parse(result.stdout), { source: herizonSource });
+});
+
+test("sources:update sends only the flags it is given", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { source: { ...herizonSource, status: "paused" } });
+
+  const result = await runCli([
+    "sources:update",
+    SOURCE_ID,
+    "--status",
+    "paused",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "PATCH");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${SOURCE_ID}`);
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { status: "paused" });
+});
+
+test("sources:update with nothing to change, or both card flags, is a usage error", async () => {
+  writeConfig("yp_secret_abcdef0123");
+
+  const nothing = await runCli(["sources:update", SOURCE_ID]);
+  const both = await runCli([
+    "sources:update",
+    SOURCE_ID,
+    "--card",
+    "--no-card",
+  ]);
+  const badStatus = await runCli([
+    "sources:update",
+    SOURCE_ID,
+    "--status",
+    "error",
+  ]);
+
+  assert.equal(nothing.code, 2);
+  assert.equal(both.code, 2);
+  assert.equal(badStatus.code, 2);
+  assert.equal(recordedRequests.length, 0);
+});
+
+test("sources:delete deletes the source", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { id: SOURCE_ID, deleted: true });
+
+  const result = await runCli(["sources:delete", SOURCE_ID]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "DELETE");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${SOURCE_ID}`);
+  assert.deepEqual(JSON.parse(result.stdout), { id: SOURCE_ID, deleted: true });
+});
+
+test("sources:check prints the new items it found", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, {
+    source: herizonSource,
+    newItems: [
+      {
+        id: SOURCE_ITEM_ID,
+        title: "Leading without a title",
+        url: "https://herizon.io/courses/leading-without-a-title",
+      },
+    ],
+  });
+
+  const result = await runCli(["sources:check", SOURCE_ID, "--quiet"]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${SOURCE_ID}/check`);
+  assert.equal(result.stdout, `${SOURCE_ITEM_ID}\n`);
+});
+
+test("sources:items filters by status and refuses one that is not a status", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { items: [], limit: 25, offset: 0 });
+
+  const result = await runCli([
+    "sources:items",
+    SOURCE_ID,
+    "--status",
+    "failed",
+  ]);
+  const refused = await runCli([
+    "sources:items",
+    SOURCE_ID,
+    "--status",
+    "sent",
+  ]);
+
+  assert.equal(result.code, 0);
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${SOURCE_ID}/items?status=failed`,
+  );
+  assert.equal(refused.code, 2);
+  assert.equal(recordedRequests.length, 1);
+});
+
+test("sources:push reads the items from a file or from stdin", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { added: 1, duplicates: 0 });
+
+  const items = [{ id: "course-4", title: "Pricing your work" }];
+  const filePath = path.join(configHome, "items.json");
+  fs.writeFileSync(filePath, JSON.stringify(items));
+
+  const fromFile = await runCli([
+    "sources:push",
+    SOURCE_ID,
+    "--items",
+    filePath,
+  ]);
+  const fromStdin = await runCli(["sources:push", SOURCE_ID, "--items", "-"], {
+    stdin: JSON.stringify(items),
+  });
+
+  assert.equal(fromFile.code, 0);
+  assert.equal(fromStdin.code, 0);
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${SOURCE_ID}/items`);
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { items });
+  assert.deepEqual(JSON.parse(recordedRequests[1].body), { items });
+  assert.deepEqual(JSON.parse(fromFile.stdout), { added: 1, duplicates: 0 });
+});
+
+test("sources:push without a json array is a usage error", async () => {
+  writeConfig("yp_secret_abcdef0123");
+
+  const notJson = await runCli(["sources:push", SOURCE_ID, "--items", "-"], {
+    stdin: "nope",
+  });
+  const notArray = await runCli(["sources:push", SOURCE_ID, "--items", "-"], {
+    stdin: "{}",
+  });
+  const noItems = await runCli(["sources:push", SOURCE_ID]);
+
+  assert.equal(notJson.code, 2);
+  assert.equal(notArray.code, 2);
+  assert.equal(noItems.code, 2);
+  assert.equal(recordedRequests.length, 0);
+});
+
+test("sources:retry puts a failed item back to waiting", async () => {
+  writeConfig("yp_secret_abcdef0123");
+  setStubResponse(200, { id: SOURCE_ITEM_ID, status: "new" });
+
+  const result = await runCli(["sources:retry", SOURCE_ID, SOURCE_ITEM_ID]);
+  const missing = await runCli(["sources:retry", SOURCE_ID]);
+
+  assert.equal(result.code, 0);
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${SOURCE_ID}/items/${SOURCE_ITEM_ID}/retry`,
+  );
+  assert.deepEqual(JSON.parse(result.stdout), {
+    id: SOURCE_ITEM_ID,
+    status: "new",
+  });
+  assert.equal(missing.code, 2);
+});
+
+test("a flag of another command is refused on a sources command", async () => {
+  writeConfig("yp_secret_abcdef0123");
+
+  const result = await runCli(["sources:get", SOURCE_ID, "--to", "x"]);
+
+  assert.equal(result.code, 2);
+  assert.equal(
+    result.stderr.includes("--to is not an option of sources:get"),
+    true,
   );
 });
 

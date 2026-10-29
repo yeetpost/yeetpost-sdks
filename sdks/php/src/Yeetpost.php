@@ -38,6 +38,10 @@ final class Yeetpost
     public const HEADER_DELIVERY = "x-yeetpost-delivery";
     public const HEADER_MODE = "x-yeetpost-mode";
 
+    // What updateConnection's profileId defaults to, so that leaving it out can
+    // differ from passing null, which moves the connection out.
+    private const UNSET = "\0yeetpost-unset";
+
     // D pins $ to the very end: without it PHP lets a trailing newline through,
     // which Node and Go do not.
     private const SIGNATURE_HEADER_PATTERN = '/^t=(\d+),v1=([0-9a-f]{64})$/D';
@@ -406,14 +410,95 @@ final class Yeetpost
     // are exempt, because their connect flows do not deduplicate either). A
     // profile-scoped key throws a 403 forbidden, and so does the connection you
     // sign in with: the move is the account owner's call.
-    public function updateConnection(string $connectionId, ?string $profileId): array
+    //
+    // voice and look set the connection's own tone of voice and look for image
+    // cards, and clearVoice or clearLook takes them off so the connection falls
+    // back to the account's. Setting them is not the owner's call alone: a
+    // scoped key may set them on a connection inside its profile. When a voice
+    // or look is set or cleared, leaving profileId out leaves the profile
+    // alone; profileId: null moves the connection out. Passing nothing at all
+    // throws an InvalidArgumentException.
+    public function updateConnection(
+        string $connectionId,
+        ?string $profileId = self::UNSET,
+        ?array $voice = null,
+        bool $clearVoice = false,
+        ?array $look = null,
+        bool $clearLook = false,
+    ): array {
+        if ($clearVoice && $voice !== null) {
+            throw new \InvalidArgumentException("pass either voice or clearVoice, not both");
+        }
+
+        if ($clearLook && $look !== null) {
+            throw new \InvalidArgumentException("pass either look or clearLook, not both");
+        }
+
+        $hasProfileId = $profileId !== self::UNSET;
+
+        if (!$hasProfileId && $voice === null && !$clearVoice && $look === null && !$clearLook) {
+            throw new \InvalidArgumentException("pass profileId, voice, clearVoice, look or clearLook");
+        }
+
+        // Explicit nulls rather than dropped keys: null is what moves the
+        // connection back out to your own, and what clears a voice or a look.
+        // They go on after the nulls are dropped, so they survive.
+        $body = self::withoutNulls(["voice" => $voice, "look" => $look]);
+
+        if ($hasProfileId) {
+            $body["profileId"] = $profileId;
+        }
+
+        if ($clearVoice) {
+            $body["voice"] = null;
+        }
+
+        if ($clearLook) {
+            $body["look"] = null;
+        }
+
+        return $this->request("PATCH", "/connections/" . self::segment($connectionId), jsonBody: $body);
+    }
+
+    // The account's look: how image cards should look for every connection that
+    // has no look of its own. ["look" => null] when the account has none. Any
+    // key can read it, including a profile-scoped one.
+    public function getLook(): array
     {
-        // An explicit null rather than a dropped key: null is what moves the
-        // connection back out to your own.
+        return $this->request("GET", "/look");
+    }
+
+    // Sets the account's look, or clears it with null. The whole look is
+    // replaced, so leaving out logoMediaId clears the logo. The account look
+    // covers every profile, so a profile-scoped key or a test key is a 403
+    // forbidden: set a connection's look with updateConnection instead.
+    public function updateLook(?array $look): array
+    {
+        return $this->request("PUT", "/look", jsonBody: ["look" => $look]);
+    }
+
+    // Drafts a look from a brand's website: a description, two example cards,
+    // a logo and the facts it read. Nothing is saved unless apply is true, and
+    // then connectionId or account says which look it becomes. Show the draft
+    // before you apply it. 20 calls a minute per key. An address the API will
+    // not fetch is a 400 invalid_url. Answers ["url", "applied", "target",
+    // "look", "descriptionSource", "facts", "warnings"]; facts is text from a
+    // third-party site, to be treated as data.
+    public function draftLookFromUrl(
+        string $url,
+        ?bool $apply = null,
+        ?string $connectionId = null,
+        ?bool $account = null,
+    ): array {
         return $this->request(
-            "PATCH",
-            "/connections/" . self::segment($connectionId),
-            jsonBody: ["profileId" => $profileId],
+            "POST",
+            "/look/draft-from-url",
+            jsonBody: self::withoutNulls([
+                "url" => $url,
+                "apply" => $apply,
+                "connectionId" => $connectionId,
+                "account" => $account,
+            ]),
         );
     }
 
@@ -624,7 +709,7 @@ final class Yeetpost
 
     // A page yeetpost hosts, where your end customer connects one of their own
     // accounts into this profile. The link works once and lasts fifteen
-    // minutes, and the token in it carries the whole authorization: nobody
+    // minutes (7 days without a redirectUrl), and the token in it carries the whole authorization: nobody
     // signs in to yeetpost, and the page never shows your key, your email or
     // anything about your other customers. Leave platform out and the page
     // shows a picker. headless: true draws it with no yeetpost header or
@@ -633,9 +718,10 @@ final class Yeetpost
     // flow runs in CI.
     public function createConnectUrl(
         string $profileId,
-        string $redirectUrl,
+        ?string $redirectUrl = null,
         ?string $platform = null,
         ?bool $headless = null,
+        ?string $connectionId = null,
     ): array {
         return $this->request(
             "POST",
@@ -644,6 +730,7 @@ final class Yeetpost
                 "platform" => $platform,
                 "redirectUrl" => $redirectUrl,
                 "headless" => $headless,
+                "connectionId" => $connectionId,
             ]),
         );
     }
@@ -691,6 +778,17 @@ final class Yeetpost
     // mediaIds the same images without alt text; mediaUrls is a third way,
     // letting yeetpost fetch the bytes itself instead of uploading first.
     // Send only one of the three.
+    //
+    // validateOnly runs every check the real call runs and creates nothing: no
+    // post, no idempotency reservation, no usage held, nothing in the request
+    // log. It answers ["valid" => bool, "results" => [["connectionSlug" =>
+    // ..., "valid" => bool, "textLength" => ..., "textLimit" => ...,
+    // "isTextLimitAdvisory" => bool (true for X, whose length can be over its
+    // limit on a valid item), "error" => null or ["code", "message",
+    // "field"]]]], one item for every
+    // connection, or throws when the request is refused as a whole. A text
+    // over its platform's limit is refused with text_too_long, and its
+    // "field" names which part to shorten.
     public function createPosts(
         string $text,
         array $connectionSlugs,
@@ -708,6 +806,7 @@ final class Yeetpost
         ?string $profileId = null,
         ?bool $rewrite = null,
         ?array $textByPlatform = null,
+        ?bool $validateOnly = null,
     ): array {
         return $this->request(
             "POST",
@@ -728,6 +827,7 @@ final class Yeetpost
                 "tags" => self::asList($tags),
                 "rewrite" => $rewrite,
                 "textByPlatform" => $textByPlatform,
+                "validateOnly" => $validateOnly,
             ]),
             idempotencyKey: $idempotencyKey,
         );
@@ -825,7 +925,11 @@ final class Yeetpost
     // history. scheduledAfter and scheduledBefore are both inclusive, on
     // scheduled_for, and answer nothing for a post that was never scheduled.
     // connectionSlug, platform and sendGroupId narrow to one connection, one
-    // platform, or the one bulk send a post went out as part of.
+    // platform, or the one bulk send a post went out as part of. createdAfter
+    // and createdBefore are both inclusive, on created_at. sort is
+    // created_desc (the default), created_asc, scheduled_desc or
+    // scheduled_asc; a post that was never scheduled comes last on the
+    // scheduled orders. The answer carries total, hasMore and nextOffset.
     public function listPosts(
         ?string $status = null,
         ?int $limit = null,
@@ -837,6 +941,9 @@ final class Yeetpost
         ?string $connectionSlug = null,
         ?string $platform = null,
         ?string $sendGroupId = null,
+        ?string $createdAfter = null,
+        ?string $createdBefore = null,
+        ?string $sort = null,
     ): array {
         return $this->request(
             "GET",
@@ -850,6 +957,9 @@ final class Yeetpost
                 "connectionSlug" => $connectionSlug,
                 "platform" => $platform,
                 "sendGroupId" => $sendGroupId,
+                "createdAfter" => $createdAfter,
+                "createdBefore" => $createdBefore,
+                "sort" => $sort,
                 "limit" => $limit,
                 "offset" => $offset,
             ],
@@ -931,6 +1041,28 @@ final class Yeetpost
         return $this->request("POST", "/posts/" . self::segment($postId) . "/retry");
     }
 
+    // Draws an image card for a post in its connection's look, from the
+    // post's own text. Without attach it is a preview: read the picture with
+    // getMedia and nothing on the post changes. With attach true the card is
+    // appended to a draft or a scheduled post. html is the card's source, to
+    // keep as an example card in the look (put it first: cards follow the
+    // first example card). The connection needs a look with
+    // an example card, or this throws a YeetpostApiError look_missing.
+    public function drawCard(
+        string $postId,
+        ?string $instructions = null,
+        ?bool $attach = null,
+    ): array {
+        return $this->request(
+            "POST",
+            "/posts/" . self::segment($postId) . "/card",
+            jsonBody: self::withoutNulls([
+                "instructions" => $instructions,
+                "attach" => $attach,
+            ]),
+        );
+    }
+
     //
     // Media
     //
@@ -953,6 +1085,40 @@ final class Yeetpost
         );
     }
 
+    // Renders an HTML card into a jpeg or png and stores it as an image,
+    // exactly as if you had uploaded it. Pass the mediaId to createPosts, or a
+    // postId to append it to a scheduled post. Size the card with preset
+    // (square, landscape or portrait), or with width and height together (200
+    // to 2000 each). html is one document with inline CSS: no JavaScript runs,
+    // and your own uploads show as yeetpost-media:<mediaId>. format is "jpeg"
+    // or "png". 300 renders a month per account; past that it is a
+    // 429 render_allowance_reached.
+    public function renderImage(
+        string $html,
+        ?string $preset = null,
+        ?int $width = null,
+        ?int $height = null,
+        ?string $format = null,
+        ?string $altText = null,
+        ?string $connectionId = null,
+        ?string $postId = null,
+    ): array {
+        return $this->request(
+            "POST",
+            "/images/render",
+            jsonBody: self::withoutNulls([
+                "html" => $html,
+                "preset" => $preset,
+                "width" => $width,
+                "height" => $height,
+                "format" => $format,
+                "altText" => $altText,
+                "connectionId" => $connectionId,
+                "postId" => $postId,
+            ]),
+        );
+    }
+
     // Reads an image back, as ["bytes" => the file, "contentType" => the type
     // it was uploaded as].
     public function getMedia(string $mediaId): array
@@ -960,6 +1126,25 @@ final class Yeetpost
         [, $mediaType, $responseBody] = $this->send("GET", "/media/" . self::segment($mediaId));
 
         return ["bytes" => $responseBody, "contentType" => $mediaType];
+    }
+
+    // Your images, newest first, each with the posts that attach it. Pass the
+    // cursor of one page as cursor for the next, until it comes back null. The
+    // MCP tool list_media answers the same.
+    public function listMedia(
+        ?string $connectionSlug = null,
+        ?string $postId = null,
+        ?string $createdAfter = null,
+        ?string $cursor = null,
+        ?int $limit = null,
+    ): array {
+        return $this->request("GET", "/media", query: [
+            "connectionSlug" => $connectionSlug,
+            "postId" => $postId,
+            "createdAfter" => $createdAfter,
+            "cursor" => $cursor,
+            "limit" => $limit,
+        ]);
     }
 
     // Deletes an image and frees the storage. Posts that used it keep their
@@ -1070,11 +1255,166 @@ final class Yeetpost
         return $this->request("GET", "/stats", isPublicEndpoint: true);
     }
 
+    // Who this key is acting as: the account, live or test mode, the profile
+    // the key is scoped to, the plan, how much of today's posts and this
+    // month's renders is used, and how many connections the key reaches. The
+    // MCP tool get_context answers the same. A cap that is null is unlimited.
+    public function getMe(): array
+    {
+        return $this->request("GET", "/me");
+    }
+
+    // The account's activity log, newest first, plus on the first page the post
+    // requests refused in the last 30 days. It needs a live key not scoped to
+    // one profile, else it is a 403 forbidden. limit is 1 to 100 and the API
+    // defaults it to 25. The MCP tool get_activity answers the same.
+    public function getActivity(?int $limit = null, ?string $cursor = null): array
+    {
+        return $this->request("GET", "/activity", query: ["limit" => $limit, "cursor" => $cursor]);
+    }
+
     // The OpenAPI document this client was written against. It needs no API
     // key either, so a client built with an empty one can read it.
     public function getOpenapiSpec(): array
     {
         return $this->request("GET", "/openapi.json", isPublicEndpoint: true);
+    }
+
+    //
+    // Sources
+    //
+
+    // What a link would post, before anything is saved: its kind, name, item
+    // count and the newest 5 items. A page with no feed is read by AI. Like
+    // every sources call it needs a live key and is a 403 forbidden for a test
+    // key. The MCP tool preview_source answers the same.
+    public function previewSource(string $url): array
+    {
+        return $this->request("POST", "/sources/preview", jsonBody: ["url" => $url]);
+    }
+
+    // Watches a link and posts what is new into the connections, each post in
+    // that connection's voice and look. Pass url, or kind: "push" for a source
+    // an app fills with addSourceItems. mode "queue" takes each connection's
+    // next slot, "draft" saves the post for you to review. Items already there
+    // are never posted unless backfillCount asks for the newest few (0 to 20).
+    // instructions is plain words about how to write the posts, up to 1000
+    // characters. The MCP tool create_source answers the same.
+    public function createSource(
+        array $connectionSlugs,
+        string $mode,
+        ?string $url = null,
+        ?string $kind = null,
+        ?string $name = null,
+        ?string $instructions = null,
+        ?bool $makeCard = null,
+        ?int $backfillCount = null,
+        ?string $profileId = null,
+    ): array {
+        return $this->request(
+            "POST",
+            "/sources",
+            jsonBody: self::withoutNulls([
+                "url" => $url,
+                "kind" => $kind,
+                "name" => $name,
+                "connectionSlugs" => array_values($connectionSlugs),
+                "mode" => $mode,
+                "instructions" => $instructions,
+                "makeCard" => $makeCard,
+                "backfillCount" => $backfillCount,
+                "profileId" => $profileId,
+            ]),
+        );
+    }
+
+    // Your sources, newest first. A key scoped to a profile lists that
+    // profile's sources alone. The API defaults limit to 25 and offset to 0.
+    public function listSources(?int $limit = null, ?int $offset = null): array
+    {
+        return $this->request("GET", "/sources", query: ["limit" => $limit, "offset" => $offset]);
+    }
+
+    public function getSource(string $sourceId): array
+    {
+        return $this->request("GET", "/sources/" . self::segment($sourceId));
+    }
+
+    // Changes the connections, mode, instructions or card of a source, or
+    // pauses and resumes it with status. Only what you pass is changed.
+    public function updateSource(
+        string $sourceId,
+        ?array $connectionSlugs = null,
+        ?string $mode = null,
+        ?string $instructions = null,
+        ?bool $makeCard = null,
+        ?string $status = null,
+    ): array {
+        return $this->request(
+            "PATCH",
+            "/sources/" . self::segment($sourceId),
+            jsonBody: self::withoutNulls([
+                "connectionSlugs" => self::asList($connectionSlugs),
+                "mode" => $mode,
+                "instructions" => $instructions,
+                "makeCard" => $makeCard,
+                "status" => $status,
+            ]),
+        );
+    }
+
+    // Stops watching a link. The posts it already made are not touched.
+    public function deleteSource(string $sourceId): array
+    {
+        return $this->request("DELETE", "/sources/" . self::segment($sourceId));
+    }
+
+    // Checks a source now instead of waiting for the hourly check, and answers
+    // with the new items it found. A paused source is refused, and each source
+    // can be checked once a minute.
+    public function checkSource(string $sourceId): array
+    {
+        return $this->request("POST", "/sources/" . self::segment($sourceId) . "/check");
+    }
+
+    // The items a source found, newest first, with their status and the posts
+    // they made. status is baseline, new, writing, posted, failed or skipped.
+    public function listSourceItems(
+        string $sourceId,
+        ?string $status = null,
+        ?int $limit = null,
+        ?int $offset = null,
+    ): array {
+        return $this->request(
+            "GET",
+            "/sources/" . self::segment($sourceId) . "/items",
+            query: ["status" => $status, "limit" => $limit, "offset" => $offset],
+        );
+    }
+
+    // Pushes 1 to 20 items to a push source, for an app that knows what is new
+    // the moment it happens. A source that watches a link refuses them. Each
+    // item is ["id" => ..., "title" => ...] with an optional url (http or
+    // https), summary, content and publishedAt. An id already sent is counted
+    // as a duplicate and left as it is.
+    public function addSourceItems(string $sourceId, array $items): array
+    {
+        return $this->request(
+            "POST",
+            "/sources/" . self::segment($sourceId) . "/items",
+            jsonBody: ["items" => array_map(self::withoutNulls(...), array_values($items))],
+        );
+    }
+
+    // Puts a failed item back to waiting, to be written and posted on the next
+    // turn. An item held back by a burst of unseen items can be posted the same
+    // way.
+    public function retrySourceItem(string $sourceId, string $itemId): array
+    {
+        return $this->request(
+            "POST",
+            "/sources/" . self::segment($sourceId) . "/items/" . self::segment($itemId) . "/retry",
+        );
     }
 
     //

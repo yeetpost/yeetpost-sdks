@@ -8,18 +8,20 @@ Node 18 or newer.
 
 ## Install
 
-Not published yet. From this repo:
-
 ```bash
-cd sdks/node && yarn install && yarn build
+npm install yeetpost
 ```
 
-To use the `yeetpost` command from anywhere, link it: `yarn link` (or `npm link`)
-in `sdks/node`. Without linking, run `node sdks/node/dist/cli.js` instead.
+> The `yeetpost` package already on npm is the older one from
+> [`yeetpost/yeetpost-node`](https://github.com/yeetpost/yeetpost-node): a single
+> `yeetpost({ connection, text })` over `POST /post/{slug}`, plus a CLI. It predates the
+> JSON endpoint, so it has no `createPosts`, scheduling, idempotency, post listing or
+> webhooks. This client is the whole v2 surface.
 
 ## Versioning
 
-`2.6.0`, matching the python client.
+`2.6.0`, matching the python client. No 2.x has ever been published, so nothing
+here is a break for anyone.
 
 ## CLI
 
@@ -27,8 +29,8 @@ The same package installs a `yeetpost` command. Ten commands, no generated
 catalogue.
 
 ```bash
-yeetpost login
-yeetpost post "shipped the new api docs today" --to all
+npx yeetpost login
+npx yeetpost post "shipped the new api docs today" --to all
 ```
 
 `login` asks for an API key with the typing hidden, checks it against
@@ -51,16 +53,26 @@ disk.
 | `yeetpost post:cancel <id>`         | Cancel, delete a draft, or take one down                            |
 | `yeetpost media:upload <file>`      | Upload an image, print the id                                       |
 | `yeetpost webhooks`                 | Your webhook endpoints                                              |
+| `yeetpost sources`                  | The links yeetpost watches to post what is new                      |
+| `yeetpost sources:preview <url>`    | What yeetpost finds at a link, before anything is saved             |
+| `yeetpost sources:create <url>`     | Watch a link: `--to <slugs> --mode queue\|draft`                    |
+| `yeetpost sources:get <id>`         | One source with its status and item counts                          |
+| `yeetpost sources:update <id>`      | Change connections, mode, instructions or card, or `--status paused` |
+| `yeetpost sources:delete <id>`      | Stop watching a link                                                |
+| `yeetpost sources:check <id>`       | Check now and print the new items                                   |
+| `yeetpost sources:items <id>`       | A source's items and the posts they made                            |
+| `yeetpost sources:push <id>`        | Push items from `--items <file\|->` to a push source                |
+| `yeetpost sources:retry <id> <item>` | Try a failed item again                                            |
 
 Commands that act on one record use a colon, so `post` (the verb) and
-`post:get` (a record) never collide. `yeetpost media upload` is accepted as the
+`post:get` (a record) never collide. `yeetpost media upload` and `yeetpost sources preview <url>` are accepted as the
 spelling the docs use.
 
 `--profile <id>` is on the three commands that can read one end customer:
 `connections --profile`, `post --profile` and `posts --profile`. There is no
 `yeetpost profiles`, and no profile CRUD: making, renaming and deleting one is a
 platform-builder job, done from the server that holds the API key, so it stays
-in the API and in the clients below. That also keeps the ten commands ten.
+in the API and in the clients below. 
 
 ### Output is json, because agents read it
 
@@ -174,6 +186,7 @@ before the request goes out:
 ```bash
 draft=$(yeetpost post "half an idea" --to linkedin --draft --tag launch --quiet)
 yeetpost posts --status draft --tag launch --pretty
+yeetpost posts --created-after 2026-09-01T00:00:00Z --sort created_asc --offset 25
 yeetpost post:cancel "$draft"   # throws the draft away
 ```
 
@@ -523,6 +536,46 @@ and `listPosts({ tag })` narrows by all of them at once:
 const { posts } = await yeetpost.listPosts({ tag: ["launch", "q3"] });
 ```
 
+## Sources
+
+Paste a link and yeetpost posts what is new on it. A source watches a page that
+lists things (courses, a blog, a changelog), an RSS, Atom or JSON feed, or a
+sitemap, checks it every hour, and turns each new item into a post per
+connection, written in that connection's voice with a card in its look. Sources
+post for real, so every call needs a live key (a test key gets `403 forbidden`).
+
+```ts
+// What would it find? Nothing is saved.
+const preview = await yeetpost.previewSource({
+  url: "https://herizon.io/courses",
+});
+// preview.kind is "feed", "json", "sitemap" or "page"; preview.items the newest 5
+
+const { source } = await yeetpost.createSource({
+  url: "https://herizon.io/courses",
+  connectionSlugs: ["herizon_linkedin"],
+  mode: "queue", // or "draft" to review every post first
+  instructions: "one post per course, say it is free for members",
+  backfillCount: 0, // post none of what is already there
+});
+
+await yeetpost.checkSource(source.id); // now, instead of in the next hour
+const { items } = await yeetpost.listSourceItems(source.id, { status: "failed" });
+await yeetpost.retrySourceItem(source.id, items[0].id);
+await yeetpost.updateSource(source.id, { status: "paused" });
+await yeetpost.deleteSource(source.id); // the posts it made are not touched
+```
+
+An app that knows what is new the moment it happens makes a push source with
+`createSource({ kind: "push", ... })` and sends items to it:
+
+```ts
+await yeetpost.addSourceItems(source.id, {
+  items: [{ id: "course-4", title: "Pricing your work", url: "https://herizon.io/courses/pricing-your-work" }],
+});
+// { added: 1, duplicates: 0 }: an id sent twice is never posted twice
+```
+
 ## Idempotency
 
 Network calls fail halfway. Pass a key and a retry cannot double-post: same key
@@ -573,7 +626,11 @@ const { url, connectSessionId } = await yeetpost.createConnectUrl(profile.id, {
 // webhook come back with
 ```
 
-Leave `platform` out and the page shows a picker instead. The token in the url
+Leave `platform` out and the page shows a picker instead. Leave `redirectUrl`
+out and the customer finishes on a yeetpost page that says they are connected
+and can close the tab; that link lasts 7 days. Pass `connectionId` to reconnect
+an existing connection: the connection keeps its id and slug if the customer
+signs in to the same account; a different account becomes a new connection. The token in the url
 is the whole authorization: it stands for your account, that one profile and
 that one redirect, it works once, and it lasts fifteen minutes. Only its hash is
 stored, so the url above is the only time it exists, and the page never shows
@@ -837,9 +894,7 @@ Codes are the API's own vocabulary: `invalid_request`, `invalid_connection`,
 `missed_schedule` never come back from a call you made directly: they only
 show up in a stored post's own `error` (`GET /posts`, a webhook).
 `platform_unavailable` means the platform answered 429 or 5xx so nothing was
-sent, safe to send again. `platform_timeout` is Discord only: its own message
-POST timed out, so the message may already have posted and the fix is to
-check the channel before sending it again.
+sent, safe to send again. `platform_timeout` is no longer returned: when Discord is slow to answer the message POST the post counts as sent, without a message id. It stays in the vocabulary for older stored posts.
 
 `requestId` is the `x-request-id` header, and the `req_id` the body carries on
 `platform_rejected`, `internal_server_error`, `platform_unavailable` and
@@ -1059,11 +1114,11 @@ const { postsThisWeek, platformsLive } = await yeetpost.getStats();
 | `revokeProfileKey(profileId, keyId)`                       | `DELETE /profiles/{profileId}/keys/{keyId}`                 |
 | `listKeys({ includeRevoked, ... })`                        | `GET /keys`                                                 |
 | `revokeKey(keyId)`                                         | `DELETE /keys/{keyId}`                                      |
-| `createConnectUrl(profileId, { platform, redirectUrl })`   | `POST /profiles/{profileId}/connect`                        |
+| `createConnectUrl(profileId, { platform, redirectUrl, connectionId })` | `POST /profiles/{profileId}/connect`                        |
 | `getConnectSession(connectSessionId)`                      | `GET /connect-sessions/{connectSessionId}`                  |
 | `postToConnection(slug, text, { scheduledFor })`           | `POST /post/{connectionSlug}`                               |
 | `createPosts({ text, connectionSlugs, ... })`              | `POST /posts`                                               |
-| `listPosts({ status, tag, profileId, scheduledAfter, scheduledBefore, connectionSlug, platform, sendGroupId, limit, offset })` | `GET /posts`                     |
+| `listPosts({ status, tag, profileId, scheduledAfter, scheduledBefore, connectionSlug, platform, sendGroupId, createdAfter, createdBefore, sort, limit, offset })` | `GET /posts`                     |
 | `getPost(postId)`                                          | `GET /posts/{postId}`                                       |
 | `updateDraft(postId, { text, ... })`                       | `PATCH /posts/{postId}`                                     |
 | `publishPost(postId, { scheduledFor, queue })`             | `POST /posts/{postId}/publish`                              |
@@ -1071,6 +1126,7 @@ const { postsThisWeek, platformsLive } = await yeetpost.getStats();
 | `cancelPost(postId)`                                       | `DELETE /posts/{postId}`                                    |
 | `deleteDraft(postId)`                                      | `DELETE /posts/{postId}`                                    |
 | `retryPost(postId)`                                        | `POST /posts/{postId}/retry`                                |
+| `drawCard(postId, { instructions, attach })`               | `POST /posts/{postId}/card`                                 |
 | `getPostMetrics(postId)`                                   | `GET /posts/{postId}/metrics`                               |
 | `getAnalytics({ from, to, profileId, platform })`          | `GET /analytics`                                            |
 | `uploadMedia({ bytes, contentType, altText })`             | `POST /media`                                               |
@@ -1086,6 +1142,18 @@ const { postsThisWeek, platformsLive } = await yeetpost.getStats();
 | `getHealth()`                                              | `GET /health`                                               |
 | `getHealthHistory({ days })`                               | `GET /health/history`                                       |
 | `getStats()`                                               | `GET /stats`                                                |
+| `getMe()`                                                  | `GET /me`                                                   |
+| `getActivity({ limit, cursor })`                           | `GET /activity`                                             |
+| `previewSource({ url })`                                   | `POST /sources/preview`                                     |
+| `createSource({ url, connectionSlugs, mode, ... })`        | `POST /sources`                                             |
+| `listSources({ limit, offset })`                           | `GET /sources`                                              |
+| `getSource(sourceId)`                                      | `GET /sources/{sourceId}`                                   |
+| `updateSource(sourceId, { mode, status, ... })`            | `PATCH /sources/{sourceId}`                                 |
+| `deleteSource(sourceId)`                                   | `DELETE /sources/{sourceId}`                                |
+| `checkSource(sourceId)`                                    | `POST /sources/{sourceId}/check`                            |
+| `listSourceItems(sourceId, { status, limit, offset })`     | `GET /sources/{sourceId}/items`                             |
+| `addSourceItems(sourceId, { items })`                      | `POST /sources/{sourceId}/items`                            |
+| `retrySourceItem(sourceId, itemId)`                        | `POST /sources/{sourceId}/items/{itemId}/retry`             |
 | `getOpenapiSpec()`                                         | `GET /openapi.json`                                         |
 | `parseConnectRedirect(query)`                              | n/a                                                         |
 | `verifyWebhookSignature({ body, ... })`                    | n/a                                                         |

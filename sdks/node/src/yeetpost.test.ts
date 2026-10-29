@@ -103,6 +103,8 @@ const linkedinConnection = {
   queueSlots: [{ weekday: 1, time: "09:00" }],
   status: "active",
   loginExpiresAt: null,
+  voice: null,
+  look: null,
 };
 
 const acmeProfileId = "b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b";
@@ -218,6 +220,39 @@ test("updateConnection moves a connection back out with a null profileId", async
 
   assert.deepEqual(JSON.parse(recordedRequests[0].body), { profileId: null });
   assert.equal(response.connection.profileId, null);
+});
+
+test("updateConnection sets a voice without sending a profileId", async () => {
+  const voice = {
+    toneDescription: "Warm and brief.",
+    examplePosts: ["Fresh roast is out."],
+  };
+  setStubResponse(200, { connection: { ...linkedinConnection, voice } });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.updateConnection(linkedinConnection.id, {
+    voice,
+  });
+
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { voice });
+  assert.deepEqual(response.connection.voice, voice);
+});
+
+test("updateConnection sets a look without sending a profileId", async () => {
+  const look = {
+    description: "Dark navy, one orange accent.",
+    exampleCards: ["<html><body>Card</body></html>"],
+    logoMediaId: "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+  };
+  setStubResponse(200, { connection: { ...linkedinConnection, look } });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.updateConnection(linkedinConnection.id, {
+    look,
+  });
+
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { look });
+  assert.deepEqual(response.connection.look, look);
 });
 
 test("moving into a profile that already holds the account is a YeetpostApiError", async () => {
@@ -711,6 +746,19 @@ test("createConnectUrl posts the platform and the redirect url", async () => {
   assert.deepEqual(response, connectSession);
 });
 
+test("createConnectUrl reconnects a connection and may leave the redirect url out", async () => {
+  setStubResponse(200, connectSession);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  await yeetpost.createConnectUrl(acmeProfileId, {
+    connectionId: "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+  });
+
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    connectionId: "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+  });
+});
+
 test("createConnectUrl leaves the platform out so the page shows a picker", async () => {
   setStubResponse(200, connectSession);
 
@@ -1064,6 +1112,106 @@ test("uploadMedia sends the raw bytes with the content type and alt_text", async
   assert.equal(response.mediaId, "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d");
 });
 
+test("getLook reads the account's look", async () => {
+  const look = {
+    description: "Dark navy.",
+    exampleCards: ["<p>card</p>"],
+    logoMediaId: null,
+  };
+  setStubResponse(200, { look });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.getLook();
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, "/api/v2/look");
+  assert.deepEqual(response, { look });
+});
+
+test("updateLook puts the look, and null to clear it", async () => {
+  const look = {
+    description: "Dark navy.",
+    exampleCards: ["<p>card</p>"],
+    logoMediaId: "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+  };
+  setStubResponse(200, { look });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const set = await yeetpost.updateLook(look);
+
+  setStubResponse(200, { look: null });
+  const cleared = await yeetpost.updateLook(null);
+
+  assert.equal(recordedRequests[0].method, "PUT");
+  assert.equal(recordedRequests[0].url, "/api/v2/look");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { look });
+  assert.deepEqual(set, { look });
+  assert.deepEqual(JSON.parse(recordedRequests[1].body), { look: null });
+  assert.deepEqual(cleared, { look: null });
+});
+
+test("draftLookFromUrl posts the address and the target and answers the draft", async () => {
+  const draft = {
+    url: "https://brand.test/",
+    applied: true,
+    target: { type: "connection", connectionId: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b" },
+    look: {
+      description: "Acme: a light, clean look.",
+      exampleCards: ["<p>a</p>", "<p>b</p>"],
+      logoMediaId: null,
+    },
+    descriptionSource: "facts",
+    warnings: [],
+  };
+  setStubResponse(200, draft);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.draftLookFromUrl({
+    url: "https://brand.test/",
+    apply: true,
+    connectionId: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+  });
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/look/draft-from-url");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    url: "https://brand.test/",
+    apply: true,
+    connectionId: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+  });
+  assert.deepEqual(response, draft);
+});
+
+test("renderImage posts the card and answers the stored image", async () => {
+  const rendered = {
+    mediaId: "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+    contentType: "image/jpeg",
+    sizeBytes: 48213,
+    width: 1200,
+    height: 1200,
+    postId: null,
+    rendersUsed: 1,
+    rendersLimit: 300,
+  };
+  setStubResponse(200, rendered);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.renderImage({
+    html: "<html><body>Launch</body></html>",
+    preset: "square",
+    altText: "Launch card",
+  });
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/images/render");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    html: "<html><body>Launch</body></html>",
+    preset: "square",
+    altText: "Launch card",
+  });
+  assert.deepEqual(response, rendered);
+});
+
 test("createPosts sends media with its own alt text", async () => {
   setStubResponse(200, { results: [] });
 
@@ -1104,6 +1252,291 @@ test("createPosts sends mediaUrls to fetch and attach itself", async () => {
   });
 });
 
+test("getActivity sends the limit and cursor as query params", async () => {
+  const activity = { items: [], cursor: null, refusedRequests: [] };
+  setStubResponse(200, activity);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.getActivity({ limit: 10, cursor: "abc" });
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, "/api/v2/activity?limit=10&cursor=abc");
+  assert.deepEqual(response, activity);
+});
+
+//
+// Sources
+//
+
+const herizonSourceId = "7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33";
+const herizonItemId = "2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42";
+
+const herizonSource = {
+  id: herizonSourceId,
+  slug: "herizon-io",
+  name: "Herizon courses",
+  url: "https://herizon.io/courses.xml",
+  kind: "feed",
+  resolvedUrl: null,
+  profileId: null,
+  connectionSlugs: ["herizon_linkedin"],
+  mode: "queue",
+  instructions: "",
+  makeCard: true,
+  status: "active",
+  lastCheckedAt: null,
+  nextCheckAt: "2026-10-27T10:00:00.000Z",
+  lastError: null,
+  itemCounts: {
+    baseline: 3,
+    new: 0,
+    writing: 0,
+    posted: 0,
+    failed: 0,
+    skipped: 0,
+  },
+  pushUrl: null,
+  createdAt: "2026-10-27T09:00:00.000Z",
+};
+
+test("previewSource posts the url to /sources/preview", async () => {
+  const preview = {
+    kind: "feed",
+    name: "Herizon courses",
+    resolvedUrl: null,
+    itemCount: 1,
+    items: [
+      {
+        title: "Negotiating your salary",
+        url: "https://herizon.io/courses/negotiating-your-salary",
+        summary: "A short line.",
+        publishedAt: "2026-10-20T08:00:00.000Z",
+      },
+    ],
+  };
+  setStubResponse(200, preview);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.previewSource({
+    url: "https://herizon.io/courses.xml",
+  });
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources/preview");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    url: "https://herizon.io/courses.xml",
+  });
+  assert.deepEqual(response, preview);
+});
+
+test("createSource sends what it is given and leaves out the rest", async () => {
+  setStubResponse(200, { source: herizonSource });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.createSource({
+    url: "https://herizon.io/courses.xml",
+    connectionSlugs: ["herizon_linkedin"],
+    mode: "queue",
+    instructions: "one post per course",
+    backfillCount: 2,
+  });
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources");
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    url: "https://herizon.io/courses.xml",
+    connectionSlugs: ["herizon_linkedin"],
+    mode: "queue",
+    instructions: "one post per course",
+    backfillCount: 2,
+  });
+  assert.deepEqual(response, { source: herizonSource });
+});
+
+test("createSource makes a push source with kind push", async () => {
+  setStubResponse(200, { source: { ...herizonSource, kind: "push" } });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  await yeetpost.createSource({
+    kind: "push",
+    connectionSlugs: ["herizon_linkedin"],
+    mode: "draft",
+    makeCard: false,
+  });
+
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    kind: "push",
+    connectionSlugs: ["herizon_linkedin"],
+    mode: "draft",
+    makeCard: false,
+  });
+});
+
+test("listSources puts its paging in the query string", async () => {
+  const list = { sources: [herizonSource], limit: 10, offset: 5 };
+  setStubResponse(200, list);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.listSources({ limit: 10, offset: 5 });
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, "/api/v2/sources?limit=10&offset=5");
+  assert.deepEqual(response, list);
+});
+
+test("listSources sends no query string without paging", async () => {
+  setStubResponse(200, { sources: [], limit: 25, offset: 0 });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  await yeetpost.listSources();
+
+  assert.equal(recordedRequests[0].url, "/api/v2/sources");
+});
+
+test("getSource reads one source by id", async () => {
+  setStubResponse(200, { source: herizonSource });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.getSource(herizonSourceId);
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${herizonSourceId}`);
+  assert.deepEqual(response, { source: herizonSource });
+});
+
+test("updateSource patches only what it is given", async () => {
+  setStubResponse(200, { source: { ...herizonSource, status: "paused" } });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.updateSource(herizonSourceId, {
+    status: "paused",
+  });
+
+  assert.equal(recordedRequests[0].method, "PATCH");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${herizonSourceId}`);
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), { status: "paused" });
+  assert.equal(response.source.status, "paused");
+});
+
+test("deleteSource deletes by id", async () => {
+  setStubResponse(200, { id: herizonSourceId, deleted: true });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.deleteSource(herizonSourceId);
+
+  assert.equal(recordedRequests[0].method, "DELETE");
+  assert.equal(recordedRequests[0].url, `/api/v2/sources/${herizonSourceId}`);
+  assert.deepEqual(response, { id: herizonSourceId, deleted: true });
+});
+
+test("checkSource posts to the check path and returns the new items", async () => {
+  const checked = {
+    source: herizonSource,
+    newItems: [
+      {
+        id: herizonItemId,
+        title: "Leading without a title",
+        url: "https://herizon.io/courses/leading-without-a-title",
+      },
+    ],
+  };
+  setStubResponse(200, checked);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.checkSource(herizonSourceId);
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${herizonSourceId}/check`,
+  );
+  assert.deepEqual(response, checked);
+});
+
+test("listSourceItems sends the status and paging as query params", async () => {
+  const items = { items: [], limit: 10, offset: 0 };
+  setStubResponse(200, items);
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.listSourceItems(herizonSourceId, {
+    status: "failed",
+    limit: 10,
+    offset: 0,
+  });
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${herizonSourceId}/items?status=failed&limit=10&offset=0`,
+  );
+  assert.deepEqual(response, items);
+});
+
+test("addSourceItems posts the items to a push source", async () => {
+  setStubResponse(200, { added: 1, duplicates: 0 });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.addSourceItems(herizonSourceId, {
+    items: [
+      {
+        id: "course-4",
+        title: "Pricing your work",
+        url: "https://herizon.io/courses/pricing-your-work",
+      },
+    ],
+  });
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${herizonSourceId}/items`,
+  );
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    items: [
+      {
+        id: "course-4",
+        title: "Pricing your work",
+        url: "https://herizon.io/courses/pricing-your-work",
+      },
+    ],
+  });
+  assert.deepEqual(response, { added: 1, duplicates: 0 });
+});
+
+test("retrySourceItem posts to the item's retry path", async () => {
+  setStubResponse(200, { id: herizonItemId, status: "new" });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.retrySourceItem(
+    herizonSourceId,
+    herizonItemId,
+  );
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(
+    recordedRequests[0].url,
+    `/api/v2/sources/${herizonSourceId}/items/${herizonItemId}/retry`,
+  );
+  assert.deepEqual(response, { id: herizonItemId, status: "new" });
+});
+
+test("a test key's 403 on sources is thrown as a YeetpostApiError", async () => {
+  setStubResponse(403, {
+    error: "forbidden",
+    message:
+      "Sources post to real connections, so they need a live API key. Test keys cannot use them.",
+  });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_test_key", baseUrl });
+
+  await assert.rejects(yeetpost.listSources(), (err: unknown) => {
+    assert.equal(err instanceof YeetpostApiError, true);
+    assert.equal((err as YeetpostApiError).status, 403);
+    assert.equal((err as YeetpostApiError).code, "forbidden");
+    return true;
+  });
+});
+
 test("getMedia reads the bytes back with the content type", async () => {
   stubResponse = {
     status: 200,
@@ -1138,6 +1571,23 @@ test("getMedia keeps only the media type when the header has parameters", async 
   );
 
   assert.equal(response.contentType, "image/png");
+});
+
+test("listMedia puts its filters in the query string", async () => {
+  setStubResponse(200, { media: [], cursor: null });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.listMedia({
+    connectionSlug: "linkedin",
+    limit: 10,
+  });
+
+  assert.equal(recordedRequests[0].method, "GET");
+  assert.equal(
+    recordedRequests[0].url,
+    "/api/v2/media?connectionSlug=linkedin&limit=10",
+  );
+  assert.deepEqual(response, { media: [], cursor: null });
 });
 
 test("deleteMedia sends a DELETE and returns the deleted image", async () => {
@@ -1205,6 +1655,34 @@ test("listPosts puts scheduledAfter, scheduledBefore, connectionSlug, platform a
     "/api/v2/posts?scheduledAfter=2026-09-01T00%3A00%3A00Z&scheduledBefore=2026-09-30T00%3A00%3A00Z&connectionSlug=linkedin&platform=linkedin&sendGroupId=" +
       sendGroupId,
   );
+});
+
+test("listPosts puts createdAfter, createdBefore, sort and offset in the query string", async () => {
+  setStubResponse(200, {
+    posts: [],
+    limit: 10,
+    offset: 20,
+    total: 31,
+    hasMore: true,
+    nextOffset: 30,
+  });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.listPosts({
+    createdAfter: "2026-09-01T00:00:00Z",
+    createdBefore: "2026-09-30T00:00:00Z",
+    sort: "created_asc",
+    limit: 10,
+    offset: 20,
+  });
+
+  assert.equal(
+    recordedRequests[0].url,
+    "/api/v2/posts?createdAfter=2026-09-01T00%3A00%3A00Z&createdBefore=2026-09-30T00%3A00%3A00Z&sort=created_asc&limit=10&offset=20",
+  );
+  assert.equal(response.total, 31);
+  assert.equal(response.hasMore, true);
+  assert.equal(response.nextOffset, 30);
 });
 
 test("listPosts narrows to one profile and reads its posts back", async () => {
@@ -1713,6 +2191,35 @@ test("deletePost answers with the deleted post when it had gone out", async () =
   });
 });
 
+test("drawCard sends instructions and attach to the card path and returns the card", async () => {
+  setStubResponse(200, {
+    mediaId: "0d6f5b3e-8a41-4c53-b6c2-5e0d9f1a7b22",
+    html: "<html></html>",
+    attached: true,
+  });
+
+  const yeetpost = new Yeetpost({ apiKey: "yp_secret_test", baseUrl });
+  const response = await yeetpost.drawCard(
+    "6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10",
+    { instructions: "use a chart", attach: true },
+  );
+
+  assert.equal(recordedRequests[0].method, "POST");
+  assert.equal(
+    recordedRequests[0].url,
+    "/api/v2/posts/6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10/card",
+  );
+  assert.deepEqual(JSON.parse(recordedRequests[0].body), {
+    instructions: "use a chart",
+    attach: true,
+  });
+  assert.deepEqual(response, {
+    mediaId: "0d6f5b3e-8a41-4c53-b6c2-5e0d9f1a7b22",
+    html: "<html></html>",
+    attached: true,
+  });
+});
+
 test("retryPost sends a POST to the retry path and returns the resent post", async () => {
   setStubResponse(200, {
     id: "6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10",
@@ -2025,9 +2532,9 @@ test("getHealthHistory sends no query string without a window", async () => {
 
 test("getStats reads the public counts without an api key", async () => {
   const stats = {
-    postsThisWeek: 100,
-    postsAllTime: 1000,
-    liveConnections: 10,
+    postsThisWeek: 1284,
+    postsAllTime: 48210,
+    liveConnections: 391,
     platformsLive: [
       "linkedin",
       "x",

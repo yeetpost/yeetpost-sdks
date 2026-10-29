@@ -8,10 +8,7 @@ PHP 8.1 or newer.
 
 ## Install
 
-Not published yet. From this repo:
-
 ```bash
-composer config repositories.yeetpost path ../yeetpost/sdks/php
 composer require yeetpost/yeetpost
 ```
 
@@ -87,6 +84,38 @@ media: [["id" => $media["mediaId"], "altText" => "the docs page, on this post"]]
 ...]`, with the content type they were uploaded as, and `deleteMedia($mediaId)`
 frees the storage. Posts that used a deleted image keep their text and lose the
 image, so delete one only once the posts that need it have gone out.
+
+`renderImage` makes the image for you: send HTML with inline CSS and a `preset`
+(or `width` and `height`), and the answer is a `mediaId` to attach like any
+upload. 300 renders a month; past that it throws a 429
+`render_allowance_reached`.
+
+```php
+$render = $yeetpost->renderImage(
+    '<div style="font:700 64px sans-serif">The new docs page</div>',
+    preset: "landscape",
+);
+```
+
+## Voice and look
+
+`updateConnection` sets a connection's own tone of voice and look for image
+cards, and `clearVoice: true` or `clearLook: true` takes them off again so the
+connection falls back to the account's. Leaving `profileId` out leaves the profile
+alone, and `profileId: null` moves the connection back out to your own. Passing
+nothing at all throws. The
+account look is `getLook()` and `updateLook($look)`; `updateLook(null)` clears
+it.
+
+```php
+$yeetpost->updateConnection(
+    $connection["id"],
+    voice: ["toneDescription" => "dry and short", "examplePosts" => ["shipped"]],
+);
+$yeetpost->updateLook(
+    ["description" => "warm and bold", "exampleCards" => [], "logoMediaId" => null],
+);
+```
 
 ## Threads and first comments
 
@@ -189,6 +218,11 @@ $yeetpost->deletePost($posts[0]["id"]);
 $post = $yeetpost->getPost($posts[0]["id"])["post"];
 // $post["status"] === "cancelled"
 ```
+
+`listPosts` also takes `createdAfter` and `createdBefore` (ISO 8601, on
+`createdAt`, both inclusive) and `sort` (`created_desc`, the default,
+`created_asc`, `scheduled_desc` or `scheduled_asc`). The answer carries `total`,
+`hasMore` and `nextOffset`, which is `null` on the last page.
 
 The same call on a post that already went out deletes it on its platform, head
 post and thread replies both, and answers `["id", "status" => "deleted",
@@ -327,6 +361,44 @@ once:
 ```php
 // posts tagged both launch and q3, not either
 $posts = $yeetpost->listPosts(tag: ["launch", "q3"])["posts"];
+```
+
+## Sources
+
+Paste a link and yeetpost posts what is new on it. A source watches a page that
+lists things (courses, a blog, a changelog), an RSS, Atom or JSON feed, or a
+sitemap, checks it every hour, and turns each new item into a post per
+connection, written in that connection's voice with a card in its look. Sources
+post for real, so every call needs a live key (a test key gets `403 forbidden`).
+
+```php
+// What would it find? Nothing is saved.
+$preview = $yeetpost->previewSource("https://herizon.io/courses");
+// $preview["kind"] is "feed", "json", "sitemap" or "page"; $preview["items"] the newest 5
+
+$source = $yeetpost->createSource(
+    ["herizon_linkedin"],
+    "queue", // or "draft" to review every post first
+    url: "https://herizon.io/courses",
+    instructions: "one post per course, say it is free for members",
+    backfillCount: 0, // post none of what is already there
+)["source"];
+
+$yeetpost->checkSource($source["id"]); // now, instead of in the next hour
+$items = $yeetpost->listSourceItems($source["id"], status: "failed")["items"];
+$yeetpost->retrySourceItem($source["id"], $items[0]["id"]);
+$yeetpost->updateSource($source["id"], status: "paused");
+$yeetpost->deleteSource($source["id"]); // the posts it made are not touched
+```
+
+An app that knows what is new the moment it happens makes a push source with
+`createSource($slugs, $mode, kind: "push")` and sends items to it:
+
+```php
+$yeetpost->addSourceItems($source["id"], [
+    ["id" => "course-4", "title" => "Pricing your work", "url" => "https://herizon.io/courses/pricing-your-work"],
+]);
+// ["added" => 1, "duplicates" => 0]: an id sent twice is never posted twice
 ```
 
 ## Idempotency
@@ -638,13 +710,11 @@ Codes are the API's own vocabulary: `invalid_request`, `invalid_connection`,
 `send_interrupted`, `platform_unavailable`, `platform_timeout`, `missed_slot`,
 `missed_schedule`. That is the whole vocabulary, all 33 codes, exactly as
 `openapi.json` lists them, and the
-[Errors](https://yeetpost.com/docs) section of the API docs says what
+[Errors](https://yeetpost.com/docs#errors) section of the API docs says what
 each one means. `send_interrupted`, `missed_slot` and `missed_schedule` never
 come back from a call you made directly: they only show up in a stored post's
 own error (`listPosts`, a webhook). `platform_unavailable` means the platform
-answered 429 or 5xx so nothing was sent, safe to send again. `platform_timeout`
-is Discord only: its own message POST timed out, so the message may already
-have posted and the fix is to check the channel before sending it again.
+answered 429 or 5xx so nothing was sent, safe to send again. `platform_timeout` is no longer returned: when Discord is slow to answer the message POST the post counts as sent, without a message id. It stays in the vocabulary for older stored posts.
 
 `requestId` is the `x-request-id` header, and the `req_id` the body carries on
 `platform_rejected`, `internal_server_error`, `platform_unavailable` and
@@ -840,7 +910,10 @@ needs no API key either, and is cached for 60 seconds.
 | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `listConnections(profileId)`                                              | `GET /connections`                                          |
 | `getConnection($connectionId)`                                            | `GET /connections/{connectionId}`                           |
-| `updateConnection($connectionId, $profileId)`                             | `PATCH /connections/{connectionId}`                         |
+| `updateConnection($connectionId, $profileId, voice, look)`                | `PATCH /connections/{connectionId}`                         |
+| `getLook()`                                                               | `GET /look`                                                 |
+| `updateLook($look)`                                                       | `PUT /look`                                                 |
+| `draftLookFromUrl($url, $apply, $connectionId, $account)`                 | `POST /look/draft-from-url`                                 |
 | `deleteConnection($connectionId)`                                         | `DELETE /connections/{connectionId}`                        |
 | `listConnectionQueue($connectionId)`                                      | `GET /connections/{connectionId}/queue`                     |
 | `updateConnectionQueue($connectionId, slots, timezone, paused)`           | `PATCH /connections/{connectionId}/queue`                   |
@@ -854,7 +927,7 @@ needs no API key either, and is cached for 60 seconds.
 | `revokeProfileKey($profileId, $keyId)`                                    | `DELETE /profiles/{profileId}/keys/{keyId}`                 |
 | `listKeys(includeRevoked, limit, offset)`                                 | `GET /keys`                                                 |
 | `revokeKey($keyId)`                                                       | `DELETE /keys/{keyId}`                                      |
-| `createConnectUrl($profileId, $redirectUrl, platform, ...)`               | `POST /profiles/{profileId}/connect`                        |
+| `createConnectUrl($profileId, $redirectUrl?, platform, ...)`               | `POST /profiles/{profileId}/connect`                        |
 | `getConnectSession($connectSessionId)`                                    | `GET /connect-sessions/{connectSessionId}`                  |
 | `postToConnection($slug, $text, scheduledFor)`                            | `POST /post/{connectionSlug}`                               |
 | `createPosts($text, $connectionSlugs, ...)`                               | `POST /posts`                                               |
@@ -863,12 +936,14 @@ needs no API key either, and is cached for 60 seconds.
 | `updateDraft($postId, text, ...)`                                         | `PATCH /posts/{postId}`                                     |
 | `publishPost($postId, scheduledFor, ...)`                                 | `POST /posts/{postId}/publish`                              |
 | `retryPost($postId)`                                                      | `POST /posts/{postId}/retry`                                |
+| `drawCard($postId, $instructions, $attach)`                               | `POST /posts/{postId}/card`                                 |
 | `deletePost($postId)`                                                     | `DELETE /posts/{postId}`                                    |
 | `cancelPost($postId)`                                                     | `DELETE /posts/{postId}`                                    |
 | `deleteDraft($postId)`                                                    | `DELETE /posts/{postId}`                                    |
 | `getPostMetrics($postId)`                                                 | `GET /posts/{postId}/metrics`                               |
 | `getAnalytics(from, to, profileId, platform, connectionSlug)`             | `GET /analytics`                                            |
 | `uploadMedia($imageBytes, $contentType, altText)`                         | `POST /media`                                               |
+| `renderImage($html, preset, ...)`                                         | `POST /images/render`                                       |
 | `getMedia($mediaId)`                                                      | `GET /media/{mediaId}`                                      |
 | `deleteMedia($mediaId)`                                                   | `DELETE /media/{mediaId}`                                   |
 | n/a (fetch the signed url directly)                                       | `GET /media/{mediaId}/raw`                                  |
@@ -881,6 +956,18 @@ needs no API key either, and is cached for 60 seconds.
 | `getHealth()`                                                             | `GET /health`                                               |
 | `getHealthHistory(days)`                                                  | `GET /health/history`                                       |
 | `getStats()`                                                              | `GET /stats`                                                |
+| `getMe()`                                                                 | `GET /me`                                                   |
+| `getActivity($limit, $cursor)`                                            | `GET /activity`                                             |
+| `previewSource($url)`                                                     | `POST /sources/preview`                                     |
+| `createSource($connectionSlugs, $mode, $url, $kind, ...)`                 | `POST /sources`                                             |
+| `listSources($limit, $offset)`                                            | `GET /sources`                                              |
+| `getSource($sourceId)`                                                    | `GET /sources/{sourceId}`                                   |
+| `updateSource($sourceId, $connectionSlugs, $mode, ...)`                   | `PATCH /sources/{sourceId}`                                 |
+| `deleteSource($sourceId)`                                                 | `DELETE /sources/{sourceId}`                                |
+| `checkSource($sourceId)`                                                  | `POST /sources/{sourceId}/check`                            |
+| `listSourceItems($sourceId, $status, $limit, $offset)`                    | `GET /sources/{sourceId}/items`                             |
+| `addSourceItems($sourceId, $items)`                                       | `POST /sources/{sourceId}/items`                            |
+| `retrySourceItem($sourceId, $itemId)`                                     | `POST /sources/{sourceId}/items/{itemId}/retry`             |
 | `getOpenapiSpec()`                                                        | `GET /openapi.json`                                         |
 | `Yeetpost::parseConnectRedirect($query)`                                  | n/a                                                         |
 | `Yeetpost::verifyWebhookSignature($body, $signatureHeader, $secret, ...)` | n/a                                                         |

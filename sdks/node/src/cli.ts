@@ -7,9 +7,15 @@ import readline from "node:readline/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { DEFAULT_BASE_URL, Yeetpost, YeetpostApiError } from "./yeetpost.ts";
+import {
+  type AddSourceItemsParams,
+  DEFAULT_BASE_URL,
+  type GetSourceResponse,
+  Yeetpost,
+  YeetpostApiError,
+} from "./yeetpost.ts";
 
-// The yeetpost CLI. Ten commands, each a thin call into the client in
+// The yeetpost CLI. The commands are each a thin call into the client in
 // yeetpost.ts: nothing here speaks HTTP. Output is JSON on stdout by default,
 // so an agent or a pipe can read it without parsing a table.
 //
@@ -215,14 +221,19 @@ const commandHelp: Record<
   },
   posts: {
     usage:
-      "yeetpost posts [--limit <n>] [--status <status>] [--connection <slug>]\n" +
-      "  [--profile <id>] [--tag <tag>]...",
+      "yeetpost posts [--limit <n>] [--offset <n>] [--status <status>]\n" +
+      "  [--connection <slug>] [--profile <id>] [--tag <tag>]...\n" +
+      "  [--created-after <time>] [--created-before <time>] [--sort <order>]",
     summary: "Your posts, newest first",
     example: "yeetpost posts --status draft --tag launch",
     note:
       "--profile narrows to the posts that went out for one end customer. A\n" +
       "deleted profile still answers here, so a customer you have offboarded\n" +
-      "keeps its history.",
+      "keeps its history.\n" +
+      "--created-after and --created-before take ISO 8601 timestamps, both\n" +
+      "inclusive. --sort is created_desc (the default), created_asc,\n" +
+      "scheduled_desc or scheduled_asc. Page with --offset; the json answer has\n" +
+      "total, hasMore and nextOffset.",
   },
   "post:get": {
     usage: "yeetpost post:get <id>",
@@ -244,6 +255,88 @@ const commandHelp: Record<
     usage: "yeetpost webhooks",
     summary: "Your webhook endpoints (register and delete them in the console)",
     example: "yeetpost webhooks --pretty",
+  },
+  sources: {
+    usage: "yeetpost sources [--limit <n>] [--offset <n>]",
+    summary: "The links yeetpost watches to post what is new",
+    example: "yeetpost sources --pretty",
+    note:
+      "The commands that act on a source are spelled sources:<action>, or\n" +
+      "yeetpost sources <action>: preview, create, get, update, delete, check,\n" +
+      "items, push and retry. yeetpost sources:create --help has the details.\n" +
+      "Sources post for real, so they need a live key.",
+  },
+  "sources:preview": {
+    usage: "yeetpost sources:preview <url>",
+    summary: "See what yeetpost finds at a link before saving anything",
+    example: "yeetpost sources:preview https://herizon.io/courses",
+    note:
+      "The link can be a page that lists things, an RSS, Atom or JSON feed, or a\n" +
+      "sitemap. Prints the kind, the item count and the newest 5 items.",
+  },
+  "sources:create": {
+    usage:
+      "yeetpost sources:create <url> --to <slug,slug> --mode <queue|draft>\n" +
+      '  [--instructions "text"] [--name <name>] [--no-card] [--backfill <n>]\n' +
+      "  [--profile <id>]\n" +
+      "yeetpost sources:create --push --to <slug,slug> --mode <queue|draft>",
+    summary: "Watch a link and post what is new into your connections",
+    example:
+      'yeetpost sources:create https://herizon.io/courses --to herizon_linkedin --mode queue --instructions "one post per course"',
+    note:
+      "Each new item becomes a post per connection, in its voice and look, in\n" +
+      "the queue or as a draft. Items already on the page are not posted unless\n" +
+      "--backfill asks for the newest few (0 to 20). --push makes a source an app\n" +
+      "fills itself, with sources:push.",
+  },
+  "sources:get": {
+    usage: "yeetpost sources:get <id>",
+    summary: "One source with its status, last error and item counts",
+    example: "yeetpost sources:get 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33",
+  },
+  "sources:update": {
+    usage:
+      "yeetpost sources:update <id> [--to <slug,slug>] [--mode <queue|draft>]\n" +
+      '  [--instructions "text"] [--card | --no-card] [--status <active|paused>]',
+    summary:
+      "Change a source's connections, mode, instructions or card, or pause it",
+    example:
+      "yeetpost sources:update 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33 --status paused",
+  },
+  "sources:delete": {
+    usage: "yeetpost sources:delete <id>",
+    summary: "Stop watching a link; the posts it already made are not touched",
+    example: "yeetpost sources:delete 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33",
+  },
+  "sources:check": {
+    usage: "yeetpost sources:check <id>",
+    summary: "Check a source now and print the new items it found",
+    example: "yeetpost sources:check 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33",
+  },
+  "sources:items": {
+    usage:
+      "yeetpost sources:items <id> [--status <status>] [--limit <n>] [--offset <n>]",
+    summary: "A source's items, with their status and the posts they made",
+    example:
+      "yeetpost sources:items 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33 --status failed",
+    note:
+      "--status is baseline, new, writing, posted, failed or skipped. A failed\n" +
+      "item carries an error that says the fix: sources:retry tries it again.",
+  },
+  "sources:push": {
+    usage: "yeetpost sources:push <id> --items <file|->",
+    summary: "Push items to a push source from a json file or stdin",
+    example:
+      "yeetpost sources:push 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33 --items items.json",
+    note:
+      "The file holds a json array of 1 to 20 items: { id, title, and optionally\n" +
+      "url, summary, content, publishedAt }. An id already sent is left as it is.",
+  },
+  "sources:retry": {
+    usage: "yeetpost sources:retry <id> <item id>",
+    summary: "Try a failed source item again",
+    example:
+      "yeetpost sources:retry 7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33 2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42",
   },
 };
 
@@ -340,6 +433,18 @@ interface CommandContext {
     connection?: string;
     profile?: string;
     alt?: string;
+    mode?: string;
+    instructions?: string;
+    name?: string;
+    card?: boolean;
+    "no-card"?: boolean;
+    backfill?: string;
+    offset?: string;
+    push?: boolean;
+    items?: string;
+    "created-after"?: string;
+    "created-before"?: string;
+    sort?: string;
   };
   positionals: string[];
   mode: OutputMode;
@@ -540,6 +645,13 @@ const POST_STATUSES = [
   "deleted",
 ];
 
+const POST_SORTS = [
+  "created_desc",
+  "created_asc",
+  "scheduled_desc",
+  "scheduled_asc",
+];
+
 // A tag is what the API takes: lowercase letters, digits, dashes,
 // underscores, colons, dots and slashes, 1 to 40 characters. The API
 // lowercases and trims before checking, so this does the same and passes the
@@ -577,6 +689,107 @@ const getLimit = (limitOption: string | undefined): number | undefined => {
   }
 
   return limit;
+};
+
+const getOffset = (offsetOption: string | undefined): number | undefined => {
+  if (offsetOption === undefined) {
+    return undefined;
+  }
+
+  const offset = Number(offsetOption);
+
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new UsageError("--offset must be a whole number, 0 or more");
+  }
+
+  return offset;
+};
+
+const getBackfillCount = (
+  backfillOption: string | undefined,
+): number | undefined => {
+  if (backfillOption === undefined) {
+    return undefined;
+  }
+
+  const backfillCount = Number(backfillOption);
+
+  if (
+    !Number.isInteger(backfillCount) ||
+    backfillCount < 0 ||
+    backfillCount > 20
+  ) {
+    throw new UsageError("--backfill must be a whole number between 0 and 20");
+  }
+
+  return backfillCount;
+};
+
+const SOURCES_ACTIONS = [
+  "preview",
+  "create",
+  "get",
+  "update",
+  "delete",
+  "check",
+  "items",
+  "push",
+  "retry",
+];
+
+const SOURCE_MODES = ["queue", "draft"];
+
+const getSourceMode = (
+  modeOption: string | undefined,
+): "queue" | "draft" | undefined => {
+  if (modeOption === undefined) {
+    return undefined;
+  }
+
+  if (modeOption === "queue" || modeOption === "draft") {
+    return modeOption;
+  }
+
+  throw new UsageError(`--mode must be one of ${SOURCE_MODES.join(", ")}`);
+};
+
+const SOURCE_ITEM_STATUSES = [
+  "baseline",
+  "new",
+  "writing",
+  "posted",
+  "failed",
+  "skipped",
+];
+
+const SOURCE_STATUSES = ["active", "paused"];
+
+// --card and --no-card both set makeCard, and naming both is a contradiction
+const getMakeCard = (values: CommandContext["values"]): boolean | undefined => {
+  if (values.card && values["no-card"]) {
+    throw new UsageError("--card and --no-card cannot be used together");
+  }
+
+  if (values.card) {
+    return true;
+  }
+
+  if (values["no-card"]) {
+    return false;
+  }
+
+  return undefined;
+};
+
+const getSourceSlugs = (toOption: string | undefined): string[] | undefined => {
+  if (toOption === undefined) {
+    return undefined;
+  }
+
+  return toOption
+    .split(",")
+    .map((slug) => slug.trim())
+    .filter((slug) => slug.length > 0);
 };
 
 // The same pattern the API reads an offset with: a trailing Z or +HH:MM. A
@@ -861,10 +1074,12 @@ const runPosts = async (context: CommandContext): Promise<void> => {
     throw new UsageError(`--status must be one of ${POST_STATUSES.join(", ")}`);
   }
 
+  if (values.sort && !POST_SORTS.includes(values.sort)) {
+    throw new UsageError(`--sort must be one of ${POST_SORTS.join(", ")}`);
+  }
+
   const yeetpost = getClient(context);
 
-  // GET /posts has no connection filter, so --connection narrows the page the
-  // API answered rather than asking for a filtered one
   // The guard above is what narrows the string to the client's union, and the
   // compiler cannot see that through an includes() call
   const response = await yeetpost.listPosts({
@@ -879,16 +1094,31 @@ const runPosts = async (context: CommandContext): Promise<void> => {
       | undefined,
     tag: getTags(values.tag),
     profileId: values.profile,
+    connectionSlug: values.connection,
+    createdAfter: values["created-after"],
+    createdBefore: values["created-before"],
+    sort: values.sort as
+      | "created_desc"
+      | "created_asc"
+      | "scheduled_desc"
+      | "scheduled_asc"
+      | undefined,
     limit: getLimit(values.limit),
+    offset: getOffset(values.offset),
   });
 
-  const posts = values.connection
-    ? response.posts.filter((post) => post.connectionSlug === values.connection)
-    : response.posts;
+  const posts = response.posts;
 
   printOutput(
     {
-      json: { posts, limit: response.limit, offset: response.offset },
+      json: {
+        posts,
+        limit: response.limit,
+        offset: response.offset,
+        total: response.total,
+        hasMore: response.hasMore,
+        nextOffset: response.nextOffset,
+      },
       ids: posts.map((post) => post.id),
       table: {
         headers: ["id", "connection", "status", "created", "text"],
@@ -1032,6 +1262,374 @@ const runWebhooks = async (context: CommandContext): Promise<void> => {
   );
 };
 
+const getSourceRow = (source: GetSourceResponse["source"]): string[] => {
+  return [
+    source.id,
+    source.name,
+    source.kind,
+    source.status,
+    source.mode,
+    source.connectionSlugs.join(","),
+    source.lastCheckedAt ?? "",
+  ];
+};
+
+const SOURCE_TABLE_HEADERS = [
+  "id",
+  "name",
+  "kind",
+  "status",
+  "mode",
+  "connections",
+  "last checked",
+];
+
+const runSources = async (context: CommandContext): Promise<void> => {
+  const { values, mode } = context;
+  const yeetpost = getClient(context);
+  const response = await yeetpost.listSources({
+    limit: getLimit(values.limit),
+    offset: getOffset(values.offset),
+  });
+
+  printOutput(
+    {
+      json: response,
+      ids: response.sources.map((source) => source.id),
+      table: {
+        headers: SOURCE_TABLE_HEADERS,
+        rows: response.sources.map(getSourceRow),
+      },
+    },
+    mode,
+  );
+};
+
+const runSourcesPreview = async (context: CommandContext): Promise<void> => {
+  const url = context.positionals[0];
+
+  if (!url) {
+    throw new UsageError("sources:preview needs a url");
+  }
+
+  const yeetpost = getClient(context);
+  const preview = await yeetpost.previewSource({ url });
+
+  printOutput(
+    {
+      json: preview,
+      ids: preview.items.flatMap((item) => (item.url ? [item.url] : [])),
+      table: {
+        headers: ["kind", "name", "items found", "title", "url"],
+        rows: preview.items.map((item) => [
+          preview.kind,
+          preview.name,
+          String(preview.itemCount),
+          item.title,
+          item.url ?? "",
+        ]),
+      },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesCreate = async (context: CommandContext): Promise<void> => {
+  const { values, positionals } = context;
+  const url = positionals[0];
+
+  if (!url && !values.push) {
+    throw new UsageError("sources:create needs a url, or --push");
+  }
+
+  if (url && values.push) {
+    throw new UsageError("sources:create takes a url or --push, not both");
+  }
+
+  const connectionSlugs = getSourceSlugs(values.to);
+
+  if (!connectionSlugs || connectionSlugs.length === 0) {
+    throw new UsageError("sources:create needs --to <slug,slug>");
+  }
+
+  const sourceMode = getSourceMode(values.mode);
+
+  if (!sourceMode) {
+    throw new UsageError("sources:create needs --mode queue or --mode draft");
+  }
+
+  const yeetpost = getClient(context);
+  const { source } = await yeetpost.createSource({
+    url,
+    kind: values.push ? "push" : undefined,
+    name: values.name,
+    connectionSlugs,
+    mode: sourceMode,
+    instructions: values.instructions,
+    makeCard: getMakeCard(values),
+    backfillCount: getBackfillCount(values.backfill),
+    profileId: values.profile,
+  });
+
+  printOutput(
+    {
+      json: { source },
+      ids: [source.id],
+      table: { headers: SOURCE_TABLE_HEADERS, rows: [getSourceRow(source)] },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesGet = async (context: CommandContext): Promise<void> => {
+  const sourceId = context.positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:get needs a source id");
+  }
+
+  const yeetpost = getClient(context);
+  const { source } = await yeetpost.getSource(sourceId);
+
+  printOutput(
+    {
+      json: { source },
+      ids: [source.id],
+      table: { headers: SOURCE_TABLE_HEADERS, rows: [getSourceRow(source)] },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesUpdate = async (context: CommandContext): Promise<void> => {
+  const { values, positionals } = context;
+  const sourceId = positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:update needs a source id");
+  }
+
+  if (values.status && !SOURCE_STATUSES.includes(values.status)) {
+    throw new UsageError(
+      `--status must be one of ${SOURCE_STATUSES.join(", ")}`,
+    );
+  }
+
+  const connectionSlugs = getSourceSlugs(values.to);
+  const sourceMode = getSourceMode(values.mode);
+  const makeCard = getMakeCard(values);
+
+  if (
+    connectionSlugs === undefined &&
+    sourceMode === undefined &&
+    values.instructions === undefined &&
+    makeCard === undefined &&
+    values.status === undefined
+  ) {
+    throw new UsageError(
+      "sources:update needs at least one of --to, --mode, --instructions, --card, --no-card or --status",
+    );
+  }
+
+  const yeetpost = getClient(context);
+  const { source } = await yeetpost.updateSource(sourceId, {
+    connectionSlugs,
+    mode: sourceMode,
+    instructions: values.instructions,
+    makeCard,
+    // The guard above is what narrows the string to the client's union
+    status: values.status as "active" | "paused" | undefined,
+  });
+
+  printOutput(
+    {
+      json: { source },
+      ids: [source.id],
+      table: { headers: SOURCE_TABLE_HEADERS, rows: [getSourceRow(source)] },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesDelete = async (context: CommandContext): Promise<void> => {
+  const sourceId = context.positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:delete needs a source id");
+  }
+
+  const yeetpost = getClient(context);
+  const response = await yeetpost.deleteSource(sourceId);
+
+  printOutput(
+    {
+      json: response,
+      ids: [response.id],
+      table: {
+        headers: ["id", "deleted"],
+        rows: [[response.id, String(response.deleted)]],
+      },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesCheck = async (context: CommandContext): Promise<void> => {
+  const sourceId = context.positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:check needs a source id");
+  }
+
+  const yeetpost = getClient(context);
+  const response = await yeetpost.checkSource(sourceId);
+
+  printOutput(
+    {
+      json: response,
+      ids: response.newItems.map((item) => item.id),
+      table: {
+        headers: ["id", "title", "url"],
+        rows: response.newItems.map((item) => [
+          item.id,
+          item.title,
+          item.url ?? "",
+        ]),
+      },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesItems = async (context: CommandContext): Promise<void> => {
+  const { values, positionals } = context;
+  const sourceId = positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:items needs a source id");
+  }
+
+  if (values.status && !SOURCE_ITEM_STATUSES.includes(values.status)) {
+    throw new UsageError(
+      `--status must be one of ${SOURCE_ITEM_STATUSES.join(", ")}`,
+    );
+  }
+
+  const yeetpost = getClient(context);
+  const response = await yeetpost.listSourceItems(sourceId, {
+    // The guard above is what narrows the string to the client's union
+    status: values.status as
+      | "baseline"
+      | "new"
+      | "writing"
+      | "posted"
+      | "failed"
+      | "skipped"
+      | undefined,
+    limit: getLimit(values.limit),
+    offset: getOffset(values.offset),
+  });
+
+  printOutput(
+    {
+      json: response,
+      ids: response.items.map((item) => item.id),
+      table: {
+        headers: ["id", "status", "posts", "title"],
+        rows: response.items.map((item) => [
+          item.id,
+          item.status,
+          String(item.posts.length),
+          item.title.replace(/\s+/g, " ").slice(0, 48),
+        ]),
+      },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesPush = async (context: CommandContext): Promise<void> => {
+  const { values, positionals } = context;
+  const sourceId = positionals[0];
+
+  if (!sourceId) {
+    throw new UsageError("sources:push needs a source id");
+  }
+
+  if (!values.items) {
+    throw new UsageError("sources:push needs --items <file>, or - for stdin");
+  }
+
+  let itemsText = "";
+
+  if (values.items === "-") {
+    itemsText = await readStdinText();
+  } else {
+    if (!fs.existsSync(values.items)) {
+      throw new UsageError(`no such file: ${values.items}`);
+    }
+
+    try {
+      itemsText = fs.readFileSync(values.items, "utf8");
+    } catch {
+      throw new UsageError(`could not read ${values.items}`);
+    }
+  }
+
+  let items: unknown = null;
+
+  try {
+    items = JSON.parse(itemsText);
+  } catch {
+    throw new UsageError("--items must be a json array of items");
+  }
+
+  if (!Array.isArray(items)) {
+    throw new UsageError("--items must be a json array of items");
+  }
+
+  const yeetpost = getClient(context);
+  const response = await yeetpost.addSourceItems(sourceId, {
+    // The API checks every item; this only knows it is an array
+    items: items as AddSourceItemsParams["items"],
+  });
+
+  printOutput(
+    {
+      json: response,
+      ids: [],
+      table: {
+        headers: ["added", "duplicates"],
+        rows: [[String(response.added), String(response.duplicates)]],
+      },
+    },
+    context.mode,
+  );
+};
+
+const runSourcesRetry = async (context: CommandContext): Promise<void> => {
+  const [sourceId, itemId] = context.positionals;
+
+  if (!sourceId || !itemId) {
+    throw new UsageError("sources:retry needs a source id and an item id");
+  }
+
+  const yeetpost = getClient(context);
+  const response = await yeetpost.retrySourceItem(sourceId, itemId);
+
+  printOutput(
+    {
+      json: response,
+      ids: [response.id],
+      table: {
+        headers: ["id", "status"],
+        rows: [[response.id, response.status]],
+      },
+    },
+    context.mode,
+  );
+};
+
 //
 // Entry point
 //
@@ -1060,6 +1658,18 @@ const options = {
   connection: { type: "string" },
   profile: { type: "string" },
   alt: { type: "string" },
+  mode: { type: "string" },
+  instructions: { type: "string" },
+  name: { type: "string" },
+  card: { type: "boolean" },
+  "no-card": { type: "boolean" },
+  backfill: { type: "string" },
+  offset: { type: "string" },
+  push: { type: "boolean" },
+  items: { type: "string" },
+  "created-after": { type: "string" },
+  "created-before": { type: "string" },
+  sort: { type: "string" },
 } as const;
 
 // These say how to reach the api and how to print the answer, so every command
@@ -1084,11 +1694,40 @@ const allowedOptionsByCommand: Record<string, string[]> = {
     "tag",
     "idempotency-key",
   ],
-  posts: ["limit", "status", "connection", "profile", "tag"],
+  posts: [
+    "limit",
+    "offset",
+    "status",
+    "connection",
+    "profile",
+    "tag",
+    "created-after",
+    "created-before",
+    "sort",
+  ],
   "post:get": [],
   "post:cancel": [],
   "media:upload": ["alt"],
   webhooks: [],
+  sources: ["limit", "offset"],
+  "sources:preview": [],
+  "sources:create": [
+    "to",
+    "mode",
+    "instructions",
+    "name",
+    "no-card",
+    "backfill",
+    "profile",
+    "push",
+  ],
+  "sources:get": [],
+  "sources:update": ["to", "mode", "instructions", "card", "no-card", "status"],
+  "sources:delete": [],
+  "sources:check": [],
+  "sources:items": ["status", "limit", "offset"],
+  "sources:push": ["items"],
+  "sources:retry": [],
 };
 
 const assertOptionsAreAllowed = (
@@ -1159,6 +1798,46 @@ const runCommand = async (
     return runWebhooks(context);
   }
 
+  if (commandName === "sources") {
+    return runSources(context);
+  }
+
+  if (commandName === "sources:preview") {
+    return runSourcesPreview(context);
+  }
+
+  if (commandName === "sources:create") {
+    return runSourcesCreate(context);
+  }
+
+  if (commandName === "sources:get") {
+    return runSourcesGet(context);
+  }
+
+  if (commandName === "sources:update") {
+    return runSourcesUpdate(context);
+  }
+
+  if (commandName === "sources:delete") {
+    return runSourcesDelete(context);
+  }
+
+  if (commandName === "sources:check") {
+    return runSourcesCheck(context);
+  }
+
+  if (commandName === "sources:items") {
+    return runSourcesItems(context);
+  }
+
+  if (commandName === "sources:push") {
+    return runSourcesPush(context);
+  }
+
+  if (commandName === "sources:retry") {
+    return runSourcesRetry(context);
+  }
+
   throw new UsageError(`unknown command: ${commandName}`);
 };
 
@@ -1201,6 +1880,15 @@ const main = async (): Promise<void> => {
   // "media upload" is the spelling the docs use for media:upload
   if (commandName === "media" && positionals[0] === "upload") {
     commandName = "media:upload";
+    positionals = positionals.slice(1);
+  }
+
+  // "sources preview <url>" is the spelling the docs use for sources:preview
+  if (
+    commandName === "sources" &&
+    SOURCES_ACTIONS.includes(positionals[0] ?? "")
+  ) {
+    commandName = `sources:${positionals[0]}`;
     positionals = positionals.slice(1);
   }
 
@@ -1250,7 +1938,7 @@ main().catch((error: unknown) => {
 
   if (error instanceof UsageError) {
     process.stderr.write(`${error.message}\n`);
-    process.stderr.write("yeetpost --help for the ten commands\n");
+    process.stderr.write("yeetpost --help for the commands\n");
     process.exitCode = 2;
     return;
   }

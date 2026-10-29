@@ -39,6 +39,31 @@ final class YeetpostTest extends TestCase
         "createdAt" => "2026-08-29T09:24:11.412Z",
     ];
 
+    private const SOURCE_ID = "7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33";
+
+    private const SOURCE_ITEM_ID = "2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42";
+
+    private const HERIZON_SOURCE = [
+        "id" => self::SOURCE_ID,
+        "slug" => "herizon-io",
+        "name" => "Herizon courses",
+        "url" => "https://herizon.io/courses.xml",
+        "kind" => "feed",
+        "resolvedUrl" => null,
+        "profileId" => null,
+        "connectionSlugs" => ["herizon_linkedin"],
+        "mode" => "queue",
+        "instructions" => "",
+        "makeCard" => true,
+        "status" => "active",
+        "lastCheckedAt" => null,
+        "nextCheckAt" => "2026-10-27T10:00:00.000Z",
+        "lastError" => null,
+        "itemCounts" => ["baseline" => 3, "new" => 0, "writing" => 0, "posted" => 0, "failed" => 0, "skipped" => 0],
+        "pushUrl" => null,
+        "createdAt" => "2026-10-27T09:00:00.000Z",
+    ];
+
     private const KEY_ID = "9c4e1d75-6b3a-4f28-9d10-7e5c2a8b4f31";
 
     // Word for word what the API answers a scoped key that tries to manage
@@ -290,6 +315,227 @@ final class YeetpostTest extends TestCase
         $this->assertSame('{"profileId":null}', $this->onlyRequest()["body"]);
     }
 
+    public function testUpdateConnectionSetsTheVoiceAndLeavesTheProfileAlone(): void
+    {
+        $voice = ["toneDescription" => "dry and short", "examplePosts" => ["shipped"]];
+        $updated = [
+            "connection" => array_merge(self::LINKEDIN_CONNECTION, ["voice" => $voice, "look" => null]),
+        ];
+        self::setStubResponse(200, $updated);
+
+        $response = $this->client->updateConnection(self::CONNECTION_ID, voice: $voice);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("PATCH", $request["method"]);
+        $this->assertSame("/api/v2/connections/" . self::CONNECTION_ID, $request["path"]);
+        $this->assertSame('{"voice":{"toneDescription":"dry and short","examplePosts":["shipped"]}}', $request["body"]);
+        $this->assertSame($updated, $response);
+    }
+
+    public function testUpdateConnectionSetsTheLookAndClearsTheVoice(): void
+    {
+        $look = ["description" => "warm and bold", "exampleCards" => [], "logoMediaId" => null];
+        self::setStubResponse(200, ["connection" => self::LINKEDIN_CONNECTION]);
+
+        $this->client->updateConnection(self::CONNECTION_ID, look: $look, clearVoice: true);
+
+        $this->assertSame(
+            '{"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null},"voice":null}',
+            $this->onlyRequest()["body"],
+        );
+    }
+
+    public function testUpdateConnectionSendsAnExplicitNullToClearTheLook(): void
+    {
+        self::setStubResponse(200, ["connection" => self::LINKEDIN_CONNECTION]);
+
+        $this->client->updateConnection(self::CONNECTION_ID, clearLook: true);
+
+        $this->assertSame('{"look":null}', $this->onlyRequest()["body"]);
+    }
+
+    public function testUpdateConnectionRefusesAVoiceAndClearVoiceTogether(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->client->updateConnection(
+            self::CONNECTION_ID,
+            voice: ["toneDescription" => "dry", "examplePosts" => []],
+            clearVoice: true,
+        );
+    }
+
+    public function testGetLookReadsTheAccountLook(): void
+    {
+        $look = [
+            "look" => [
+                "description" => "warm and bold",
+                "exampleCards" => ["<div>card</div>"],
+                "logoMediaId" => self::MEDIA_ID,
+            ],
+        ];
+        self::setStubResponse(200, $look);
+
+        $response = $this->client->getLook();
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame("/api/v2/look", $request["path"]);
+        $this->assertSame($look, $response);
+    }
+
+    public function testGetLookAnswersNullWhenTheAccountHasNone(): void
+    {
+        self::setStubResponse(200, ["look" => null]);
+
+        $this->assertSame(["look" => null], $this->client->getLook());
+    }
+
+    public function testUpdateLookPutsTheWholeLook(): void
+    {
+        $look = ["description" => "warm and bold", "exampleCards" => [], "logoMediaId" => null];
+        self::setStubResponse(200, ["look" => $look]);
+
+        $response = $this->client->updateLook($look);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("PUT", $request["method"]);
+        $this->assertSame("/api/v2/look", $request["path"]);
+        $this->assertSame(
+            '{"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null}}',
+            $request["body"],
+        );
+        $this->assertSame(["look" => $look], $response);
+    }
+
+    public function testUpdateLookSendsAnExplicitNullToClearIt(): void
+    {
+        self::setStubResponse(200, ["look" => null]);
+
+        $response = $this->client->updateLook(null);
+
+        $this->assertSame('{"look":null}', $this->onlyRequest()["body"]);
+        $this->assertSame(["look" => null], $response);
+    }
+
+    public function testDraftLookFromUrlPostsTheAddressAndTheTarget(): void
+    {
+        self::setStubResponse(200, json_decode('{"url":"https://brand.test/","applied":false,"target":null,"look":{"description":"Acme: a light, clean look.","exampleCards":["<p>a</p>","<p>b</p>"],"logoMediaId":null},"descriptionSource":"facts","facts":{"siteName":"Acme","title":"Acme","tagline":null,"themeColor":null,"colors":{"primary":"#c2410c","accent":null,"background":"#ffffff","text":null,"palette":[{"hex":"#c2410c","count":3}]},"fonts":{"heading":"Inter","body":"Inter","families":["Inter"],"googleFonts":[]},"logo":null,"hasInlineSvgLogo":true,"stylesheetsRead":1},"warnings":["The site\'s logo is an inline svg."]}', true));
+
+        $response = $this->client->draftLookFromUrl(
+            "https://brand.test/",
+            apply: true,
+            connectionId: self::CONNECTION_ID,
+        );
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/look/draft-from-url", $request["path"]);
+        $this->assertSame(
+            '{"url":"https://brand.test/","apply":true,"connectionId":"' . self::CONNECTION_ID . '"}',
+            $request["body"],
+        );
+        $this->assertSame("facts", $response["descriptionSource"]);
+    }
+
+    public function testRenderImagePostsTheCardAndReadsTheStoredImage(): void
+    {
+        $rendered = [
+            "mediaId" => self::MEDIA_ID,
+            "contentType" => "image/png",
+            "sizeBytes" => 2048,
+            "width" => 1200,
+            "height" => 627,
+            "postId" => self::POST_ID,
+            "rendersUsed" => 13,
+            "rendersLimit" => 300,
+        ];
+        self::setStubResponse(200, $rendered);
+
+        $response = $this->client->renderImage(
+            "a card",
+            preset: "landscape",
+            format: "png",
+            altText: "a card",
+            postId: self::POST_ID,
+        );
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/images/render", $request["path"]);
+        $this->assertSame("application/json", $request["headers"]["content-type"]);
+        $this->assertSame(
+            '{"html":"a card","preset":"landscape","format":"png","altText":"a card","postId":"' . self::POST_ID . '"}',
+            $request["body"],
+        );
+        $this->assertSame($rendered, $response);
+    }
+
+    public function testRenderImageSendsWidthAndHeightWhenThereIsNoPreset(): void
+    {
+        self::setStubResponse(200, ["mediaId" => self::MEDIA_ID, "postId" => null]);
+
+        $this->client->renderImage("x", width: 800, height: 400);
+
+        $this->assertSame('{"html":"x","width":800,"height":400}', $this->onlyRequest()["body"]);
+    }
+
+    public function testRenderImagePastTheAllowanceThrows(): void
+    {
+        self::setStubResponse(429, [
+            "error" => "render_allowance_reached",
+            "message" => "300 renders a month",
+        ]);
+
+        try {
+            $this->client->renderImage("x", preset: "square");
+            $this->fail("expected a YeetpostApiError");
+        } catch (YeetpostApiError $error) {
+            $this->assertSame(429, $error->status);
+            $this->assertSame("render_allowance_reached", $error->errorCode);
+        }
+    }
+
+    public function testUpdateConnectionSendsAnEmptyExampleListAsGiven(): void
+    {
+        self::setStubResponse(200, ["connection" => self::LINKEDIN_CONNECTION]);
+
+        $this->client->updateConnection(
+            self::CONNECTION_ID,
+            voice: ["toneDescription" => "x", "examplePosts" => []],
+            look: ["description" => "bold", "exampleCards" => [], "logoMediaId" => null],
+        );
+
+        $this->assertSame(
+            '{"voice":{"toneDescription":"x","examplePosts":[]},'
+            . '"look":{"description":"bold","exampleCards":[],"logoMediaId":null}}',
+            $this->onlyRequest()["body"],
+        );
+    }
+
+    public function testUpdateConnectionMovesOutAndSetsTheVoiceInOneCall(): void
+    {
+        self::setStubResponse(200, ["connection" => self::LINKEDIN_CONNECTION]);
+
+        $this->client->updateConnection(
+            self::CONNECTION_ID,
+            null,
+            voice: ["toneDescription" => "x", "examplePosts" => []],
+        );
+
+        $this->assertSame(
+            '{"voice":{"toneDescription":"x","examplePosts":[]},"profileId":null}',
+            $this->onlyRequest()["body"],
+        );
+    }
+
+    public function testUpdateConnectionWithNothingToChangeThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->client->updateConnection(self::CONNECTION_ID);
+    }
+
     public function testMovingIntoAProfileThatHoldsTheAccountThrows(): void
     {
         self::setStubResponse(409, [
@@ -467,6 +713,277 @@ final class YeetpostTest extends TestCase
         $this->client->listProfiles();
 
         $this->assertSame("/api/v2/profiles", $this->onlyRequest()["path"]);
+    }
+
+    public function testGetActivityPutsItsPagingInTheQueryString(): void
+    {
+        $activity = [
+            "items" => [
+                [
+                    "id" => "evt_1",
+                    "at" => "2026-10-20T09:00:00.000Z",
+                    "kind" => "post_sent",
+                    "title" => "Post sent",
+                    "detail" => "Hello",
+                    "href" => "/posts/1",
+                    "actor" => "Mari",
+                ],
+            ],
+            "cursor" => "abc",
+            "refusedRequests" => [],
+        ];
+        self::setStubResponse(200, $activity);
+
+        $response = $this->client->getActivity(limit: 10, cursor: "abc");
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame("/api/v2/activity?limit=10&cursor=abc", $request["path"]);
+        $this->assertSame($activity, $response);
+    }
+
+    public function testGetActivitySendsNoQueryStringWithoutPaging(): void
+    {
+        self::setStubResponse(200, ["items" => [], "cursor" => null, "refusedRequests" => []]);
+
+        $this->client->getActivity();
+
+        $this->assertSame("/api/v2/activity", $this->onlyRequest()["path"]);
+    }
+
+    public function testPreviewSourcePostsTheUrl(): void
+    {
+        $preview = [
+            "kind" => "feed",
+            "name" => "Herizon courses",
+            "resolvedUrl" => null,
+            "itemCount" => 0,
+            "items" => [],
+        ];
+        self::setStubResponse(200, $preview);
+
+        $response = $this->client->previewSource("https://herizon.io/courses.xml");
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/sources/preview", $request["path"]);
+        $this->assertSame(["url" => "https://herizon.io/courses.xml"], $this->decodedBody($request));
+        $this->assertSame($preview, $response);
+    }
+
+    public function testCreateSourceSendsWhatItIsGivenAndLeavesOutTheRest(): void
+    {
+        self::setStubResponse(200, ["source" => self::HERIZON_SOURCE]);
+
+        $response = $this->client->createSource(
+            ["herizon_linkedin"],
+            "queue",
+            url: "https://herizon.io/courses.xml",
+            instructions: "one post per course",
+            backfillCount: 2,
+        );
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/sources", $request["path"]);
+        $this->assertSame(
+            [
+                "url" => "https://herizon.io/courses.xml",
+                "connectionSlugs" => ["herizon_linkedin"],
+                "mode" => "queue",
+                "instructions" => "one post per course",
+                "backfillCount" => 2,
+            ],
+            $this->decodedBody($request),
+        );
+        $this->assertSame(["source" => self::HERIZON_SOURCE], $response);
+    }
+
+    public function testCreateSourceMakesAPushSourceAndSendsMakeCardFalse(): void
+    {
+        self::setStubResponse(200, ["source" => self::HERIZON_SOURCE]);
+
+        $this->client->createSource(["herizon_linkedin"], "draft", kind: "push", makeCard: false);
+
+        $this->assertSame(
+            [
+                "kind" => "push",
+                "connectionSlugs" => ["herizon_linkedin"],
+                "mode" => "draft",
+                "makeCard" => false,
+            ],
+            $this->decodedBody($this->onlyRequest()),
+        );
+    }
+
+    public function testListSourcesPutsItsPagingInTheQueryString(): void
+    {
+        $sources = ["sources" => [self::HERIZON_SOURCE], "limit" => 10, "offset" => 5];
+        self::setStubResponse(200, $sources);
+
+        $response = $this->client->listSources(limit: 10, offset: 5);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame("/api/v2/sources?limit=10&offset=5", $request["path"]);
+        $this->assertSame($sources, $response);
+    }
+
+    public function testListSourcesSendsNoQueryStringWithoutPaging(): void
+    {
+        self::setStubResponse(200, ["sources" => [], "limit" => 25, "offset" => 0]);
+
+        $this->client->listSources();
+
+        $this->assertSame("/api/v2/sources", $this->onlyRequest()["path"]);
+    }
+
+    public function testGetSourceReadsOneSourceById(): void
+    {
+        self::setStubResponse(200, ["source" => self::HERIZON_SOURCE]);
+
+        $response = $this->client->getSource(self::SOURCE_ID);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame("/api/v2/sources/" . self::SOURCE_ID, $request["path"]);
+        $this->assertSame(["source" => self::HERIZON_SOURCE], $response);
+    }
+
+    public function testUpdateSourcePatchesOnlyWhatItIsGiven(): void
+    {
+        self::setStubResponse(200, ["source" => self::HERIZON_SOURCE]);
+
+        $this->client->updateSource(self::SOURCE_ID, instructions: "", status: "paused");
+
+        $request = $this->onlyRequest();
+        $this->assertSame("PATCH", $request["method"]);
+        $this->assertSame("/api/v2/sources/" . self::SOURCE_ID, $request["path"]);
+        $this->assertSame('{"instructions":"","status":"paused"}', $request["body"]);
+    }
+
+    public function testDeleteSourceDeletesById(): void
+    {
+        self::setStubResponse(200, ["id" => self::SOURCE_ID, "deleted" => true]);
+
+        $response = $this->client->deleteSource(self::SOURCE_ID);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("DELETE", $request["method"]);
+        $this->assertSame("/api/v2/sources/" . self::SOURCE_ID, $request["path"]);
+        $this->assertSame(["id" => self::SOURCE_ID, "deleted" => true], $response);
+    }
+
+    public function testCheckSourcePostsToTheCheckPath(): void
+    {
+        $checked = [
+            "source" => self::HERIZON_SOURCE,
+            "newItems" => [
+                [
+                    "id" => self::SOURCE_ITEM_ID,
+                    "title" => "Leading without a title",
+                    "url" => "https://herizon.io/courses/leading-without-a-title",
+                ],
+            ],
+        ];
+        self::setStubResponse(200, $checked);
+
+        $response = $this->client->checkSource(self::SOURCE_ID);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/sources/" . self::SOURCE_ID . "/check", $request["path"]);
+        $this->assertSame($checked, $response);
+    }
+
+    public function testListSourceItemsSendsTheStatusAndPaging(): void
+    {
+        $items = ["items" => [], "limit" => 10, "offset" => 0];
+        self::setStubResponse(200, $items);
+
+        $response = $this->client->listSourceItems(self::SOURCE_ID, status: "failed", limit: 10, offset: 0);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame(
+            "/api/v2/sources/" . self::SOURCE_ID . "/items?status=failed&limit=10&offset=0",
+            $request["path"],
+        );
+        $this->assertSame($items, $response);
+    }
+
+    public function testAddSourceItemsPostsTheItems(): void
+    {
+        self::setStubResponse(200, ["added" => 1, "duplicates" => 0]);
+        $items = [
+            [
+                "id" => "course-4",
+                "title" => "Pricing your work",
+                "url" => "https://herizon.io/courses/pricing-your-work",
+            ],
+        ];
+
+        $response = $this->client->addSourceItems(self::SOURCE_ID, $items);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/sources/" . self::SOURCE_ID . "/items", $request["path"]);
+        $this->assertSame(["items" => $items], $this->decodedBody($request));
+        $this->assertSame(["added" => 1, "duplicates" => 0], $response);
+    }
+
+    public function testAddSourceItemsLeavesOutTheFieldsThatAreNull(): void
+    {
+        self::setStubResponse(200, ["added" => 1, "duplicates" => 0]);
+
+        $this->client->addSourceItems(self::SOURCE_ID, [
+            ["id" => "course-4", "title" => "Pricing", "url" => null, "summary" => null],
+        ]);
+
+        $this->assertSame(
+            ["items" => [["id" => "course-4", "title" => "Pricing"]]],
+            $this->decodedBody($this->onlyRequest()),
+        );
+    }
+
+    public function testRetrySourceItemPostsToTheRetryPath(): void
+    {
+        self::setStubResponse(200, ["id" => self::SOURCE_ITEM_ID, "status" => "new"]);
+
+        $response = $this->client->retrySourceItem(self::SOURCE_ID, self::SOURCE_ITEM_ID);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame(
+            "/api/v2/sources/" . self::SOURCE_ID . "/items/" . self::SOURCE_ITEM_ID . "/retry",
+            $request["path"],
+        );
+        $this->assertSame(["id" => self::SOURCE_ITEM_ID, "status" => "new"], $response);
+    }
+
+    public function testATestKeys403OnSourcesIsAnApiError(): void
+    {
+        self::setStubResponse(403, [
+            "error" => "forbidden",
+            "message" => "Sources post to real connections, so they need a live API key. Test keys cannot use them.",
+        ]);
+
+        try {
+            $this->client->listSources();
+            $this->fail("expected a YeetpostApiError");
+        } catch (YeetpostApiError $error) {
+            $this->assertSame(403, $error->status);
+            $this->assertSame("forbidden", $error->errorCode);
+        }
+    }
+
+    public function testCreateConnectUrlReconnectsWithoutARedirectUrl(): void
+    {
+        self::setStubResponse(200, self::CONNECT_SESSION);
+
+        $this->client->createConnectUrl(self::PROFILE_ID, connectionId: self::CONNECTION_ID);
+
+        $this->assertSame(["connectionId" => self::CONNECTION_ID], $this->decodedBody($this->onlyRequest()));
     }
 
     public function testGetProfileReadsOneProfile(): void
@@ -1357,6 +1874,35 @@ final class YeetpostTest extends TestCase
         );
     }
 
+    public function testListPostsSendsTheCreatedAndSortFilters(): void
+    {
+        self::setStubResponse(200, [
+            "posts" => [],
+            "limit" => 10,
+            "offset" => 20,
+            "total" => 31,
+            "hasMore" => true,
+            "nextOffset" => 30,
+        ]);
+
+        $response = $this->client->listPosts(
+            limit: 10,
+            offset: 20,
+            createdAfter: "2026-09-01T00:00:00.000Z",
+            createdBefore: "2026-09-30T00:00:00.000Z",
+            sort: "created_asc",
+        );
+
+        $this->assertSame(
+            "/api/v2/posts?createdAfter=2026-09-01T00%3A00%3A00.000Z&createdBefore=2026-09-30T00%3A00%3A00.000Z"
+                . "&sort=created_asc&limit=10&offset=20",
+            $this->onlyRequest()["path"],
+        );
+        $this->assertSame(31, $response["total"]);
+        $this->assertTrue($response["hasMore"]);
+        $this->assertSame(30, $response["nextOffset"]);
+    }
+
     public function testListPostsSendsNoQueryStringWithoutFilters(): void
     {
         self::setStubResponse(200, ["posts" => [], "limit" => 25, "offset" => 0]);
@@ -1555,6 +2101,20 @@ final class YeetpostTest extends TestCase
         $this->assertSame(["id" => self::POST_ID, "status" => "cancelled"], $response);
     }
 
+    public function testDrawCardPostsInstructionsAndAttachToTheCardPath(): void
+    {
+        $card = ["mediaId" => self::POST_ID, "html" => "<html></html>", "attached" => true];
+        self::setStubResponse(200, $card);
+
+        $response = $this->client->drawCard(self::POST_ID, "use a chart", true);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("POST", $request["method"]);
+        $this->assertSame("/api/v2/posts/" . self::POST_ID . "/card", $request["path"]);
+        $this->assertSame(["instructions" => "use a chart", "attach" => true], $this->decodedBody($request));
+        $this->assertSame($card, $response);
+    }
+
     public function testRetryPostSendsAPostToTheRetryPath(): void
     {
         self::setStubResponse(200, ["id" => self::POST_ID, "status" => "sent"]);
@@ -1670,6 +2230,18 @@ final class YeetpostTest extends TestCase
         $this->assertSame("DELETE", $request["method"]);
         $this->assertSame("/api/v2/media/" . self::MEDIA_ID, $request["path"]);
         $this->assertSame(["id" => self::MEDIA_ID, "deleted" => true], $response);
+    }
+
+    public function testListMediaPutsItsFiltersInTheQueryString(): void
+    {
+        self::setStubResponse(200, ["media" => [], "cursor" => null]);
+
+        $response = $this->client->listMedia(connectionSlug: "linkedin", limit: 10);
+
+        $request = $this->onlyRequest();
+        $this->assertSame("GET", $request["method"]);
+        $this->assertSame("/api/v2/media?connectionSlug=linkedin&limit=10", $request["path"]);
+        $this->assertSame(["media" => [], "cursor" => null], $response);
     }
 
     //
@@ -1894,9 +2466,9 @@ final class YeetpostTest extends TestCase
     public function testGetStatsReadsThePublicCountsWithoutAnApiKey(): void
     {
         $stats = [
-            "postsThisWeek" => 100,
-            "postsAllTime" => 1000,
-            "liveConnections" => 10,
+            "postsThisWeek" => 412,
+            "postsAllTime" => 18930,
+            "liveConnections" => 87,
             "platformsLive" => ["linkedin", "x", "bluesky", "mastodon", "discord", "telegram", "google_business"],
             "time" => "2026-08-29T11:05:00.512Z",
         ];

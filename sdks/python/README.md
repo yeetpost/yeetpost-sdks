@@ -9,10 +9,8 @@ Python 3.10 or newer.
 
 ## Install
 
-Not published yet. From this repo:
-
 ```bash
-pip install ./sdks/python
+pip install yeetpost
 ```
 
 Or just copy `yeetpost.py` into your project. It is one file with no imports
@@ -92,6 +90,38 @@ yeetpost.create_posts(
 uploaded as, and `delete_media(media_id)` frees the storage. Posts that used a
 deleted image keep their text and lose the image, so delete one only once the
 posts that need it have gone out.
+
+`render_image` makes the image for you: send HTML with inline CSS and a `preset`
+(or `width` and `height`), and the answer is a `mediaId` to attach like any
+upload. 300 renders a month; past that it raises a 429
+`render_allowance_reached`.
+
+```python
+render = yeetpost.render_image(
+    '<div style="font:700 64px sans-serif">The new docs page</div>',
+    preset="landscape",
+)
+```
+
+## Voice and look
+
+`update_connection` sets a connection's own tone of voice and look for image
+cards, and `clear_voice=True` or `clear_look=True` takes them off again so the
+connection falls back to the account's. Leaving `profile_id` out leaves the profile
+alone, and `profile_id=None` moves the connection back out to your own. Passing
+nothing at all raises a `ValueError`. The
+account look is `get_look()` and `update_look(look)`; `update_look(None)` clears
+it.
+
+```python
+yeetpost.update_connection(
+    connection["id"],
+    voice={"toneDescription": "dry and short", "examplePosts": ["shipped"]},
+)
+yeetpost.update_look(
+    {"description": "warm and bold", "exampleCards": [], "logoMediaId": None}
+)
+```
 
 ## Threads and first comments
 
@@ -248,6 +278,12 @@ yeetpost.list_posts(
 )
 ```
 
+`created_after` and `created_before` (ISO 8601, read against `createdAt`, both
+inclusive) and `sort` (`created_desc`, the default, `created_asc`,
+`scheduled_desc` or `scheduled_asc`) work the same way. The answer carries
+`total`, `hasMore` and `nextOffset`, so page with `offset=response["nextOffset"]`
+until it is `None`.
+
 ## Queues
 
 Give a connection a list of posting slots and `queue=True` takes the next free
@@ -358,6 +394,45 @@ once:
 ```python
 # posts tagged both launch and q3, not either
 posts = yeetpost.list_posts(tag=["launch", "q3"])["posts"]
+```
+
+## Sources
+
+Paste a link and yeetpost posts what is new on it. A source watches a page that
+lists things (courses, a blog, a changelog), an RSS, Atom or JSON feed, or a
+sitemap, checks it every hour, and turns each new item into a post per
+connection, written in that connection's voice with a card in its look. Sources
+post for real, so every call needs a live key (a test key gets `403 forbidden`).
+
+```python
+# What would it find? Nothing is saved.
+preview = yeetpost.preview_source("https://herizon.io/courses")
+# preview["kind"] is "feed", "json", "sitemap" or "page"; preview["items"] the newest 5
+
+source = yeetpost.create_source(
+    ["herizon_linkedin"],
+    "queue",  # or "draft" to review every post first
+    url="https://herizon.io/courses",
+    instructions="one post per course, say it is free for members",
+    backfill_count=0,  # post none of what is already there
+)["source"]
+
+yeetpost.check_source(source["id"])  # now, instead of in the next hour
+items = yeetpost.list_source_items(source["id"], status="failed")["items"]
+yeetpost.retry_source_item(source["id"], items[0]["id"])
+yeetpost.update_source(source["id"], status="paused")
+yeetpost.delete_source(source["id"])  # the posts it made are not touched
+```
+
+An app that knows what is new the moment it happens makes a push source with
+`create_source(slugs, mode, kind="push")` and sends items to it:
+
+```python
+yeetpost.add_source_items(
+    source["id"],
+    [{"id": "course-4", "title": "Pricing your work", "url": "https://herizon.io/courses/pricing-your-work"}],
+)
+# {"added": 1, "duplicates": 0}: an id sent twice is never posted twice
 ```
 
 ## Idempotency
@@ -671,9 +746,7 @@ Codes are the API's own vocabulary: `invalid_request`, `invalid_connection`,
 `missed_schedule` never come back from a call you made directly: they only
 show up in a stored post's own error (`list_posts`, a webhook).
 `platform_unavailable` means the platform answered 429 or 5xx so nothing was
-sent, safe to send again. `platform_timeout` is Discord only: its own message
-POST timed out, so the message may already have posted and the fix is to
-check the channel before sending it again.
+sent, safe to send again. `platform_timeout` is no longer returned: when Discord is slow to answer the message POST the post counts as sent, without a message id. It stays in the vocabulary for older stored posts.
 
 `request_id` is the `x-request-id` header, and the `req_id` the body carries on
 `platform_rejected`, `internal_server_error`, `platform_unavailable` and
@@ -872,7 +945,10 @@ stats = yeetpost.get_stats()
 | --------------------------------------------------------------------- | ------------------------------------------------------------ |
 | `list_connections(profile_id)`                                       | `GET /connections`                                          |
 | `get_connection(connection_id)`                                      | `GET /connections/{connectionId}`                           |
-| `update_connection(connection_id, profile_id)`                       | `PATCH /connections/{connectionId}`                         |
+| `update_connection(connection_id, profile_id, voice, look)`          | `PATCH /connections/{connectionId}`                         |
+| `get_look()`                                                         | `GET /look`                                                 |
+| `update_look(look)`                                                  | `PUT /look`                                                 |
+| `draft_look_from_url(url, *, apply, connection_id, account)`         | `POST /look/draft-from-url`                                 |
 | `delete_connection(connection_id)`                                   | `DELETE /connections/{connectionId}`                        |
 | `list_connection_queue(connection_id)`                               | `GET /connections/{connectionId}/queue`                     |
 | `update_connection_queue(connection_id, slots, timezone, paused)`    | `PATCH /connections/{connectionId}/queue`                   |
@@ -886,7 +962,7 @@ stats = yeetpost.get_stats()
 | `revoke_profile_key(profile_id, key_id)`                             | `DELETE /profiles/{profileId}/keys/{keyId}`                 |
 | `list_keys(include_revoked, limit, offset)`                          | `GET /keys`                                                 |
 | `revoke_key(key_id)`                                                 | `DELETE /keys/{keyId}`                                      |
-| `create_connect_url(profile_id, redirect_url, platform, ...)`        | `POST /profiles/{profileId}/connect`                        |
+| `create_connect_url(profile_id, redirect_url?, platform, ...)`        | `POST /profiles/{profileId}/connect`                        |
 | `get_connect_session(connect_session_id)`                            | `GET /connect-sessions/{connectSessionId}`                  |
 | `post_to_connection(slug, text, scheduled_for)`                      | `POST /post/{connectionSlug}`                               |
 | `create_posts(text, connection_slugs, ...)`                          | `POST /posts`                                               |
@@ -895,12 +971,14 @@ stats = yeetpost.get_stats()
 | `update_draft(post_id, text, ...)`                                   | `PATCH /posts/{postId}`                                     |
 | `publish_post(post_id, scheduled_for, ...)`                          | `POST /posts/{postId}/publish`                              |
 | `retry_post(post_id)`                                                | `POST /posts/{postId}/retry`                                |
+| `draw_card(post_id, instructions, attach)`                           | `POST /posts/{postId}/card`                                 |
 | `delete_post(post_id)`                                               | `DELETE /posts/{postId}`                                    |
 | `cancel_post(post_id)`                                               | `DELETE /posts/{postId}`                                    |
 | `delete_draft(post_id)`                                              | `DELETE /posts/{postId}`                                    |
 | `get_post_metrics(post_id)`                                          | `GET /posts/{postId}/metrics`                               |
 | `get_analytics(from_, to, profile_id, platform)`                     | `GET /analytics`                                            |
 | `upload_media(image_bytes, content_type, alt_text)`                  | `POST /media`                                               |
+| `render_image(html, preset, ...)`                                    | `POST /images/render`                                       |
 | `get_media(media_id)`                                                | `GET /media/{mediaId}`                                      |
 | `delete_media(media_id)`                                             | `DELETE /media/{mediaId}`                                   |
 | n/a (fetch the signed url directly)                                  | `GET /media/{mediaId}/raw`                                  |
@@ -913,6 +991,18 @@ stats = yeetpost.get_stats()
 | `get_health()`                                                       | `GET /health`                                               |
 | `get_health_history(days)`                                           | `GET /health/history`                                       |
 | `get_stats()`                                                        | `GET /stats`                                                |
+| `get_me()`                                                           | `GET /me`                                                   |
+| `get_activity(limit, cursor)`                                        | `GET /activity`                                             |
+| `preview_source(url)`                                                | `POST /sources/preview`                                     |
+| `create_source(connection_slugs, mode, url=, kind=, ...)`            | `POST /sources`                                             |
+| `list_sources(limit, offset)`                                        | `GET /sources`                                              |
+| `get_source(source_id)`                                              | `GET /sources/{sourceId}`                                   |
+| `update_source(source_id, mode=, status=, ...)`                      | `PATCH /sources/{sourceId}`                                 |
+| `delete_source(source_id)`                                           | `DELETE /sources/{sourceId}`                                |
+| `check_source(source_id)`                                            | `POST /sources/{sourceId}/check`                            |
+| `list_source_items(source_id, status, limit, offset)`                | `GET /sources/{sourceId}/items`                             |
+| `add_source_items(source_id, items)`                                 | `POST /sources/{sourceId}/items`                            |
+| `retry_source_item(source_id, item_id)`                              | `POST /sources/{sourceId}/items/{itemId}/retry`             |
 | `get_openapi_spec()`                                                 | `GET /openapi.json`                                         |
 | `parse_connect_redirect(query)`                                      | n/a                                                         |
 | `verify_webhook_signature(body, signature_header, ...)`              | n/a                                                         |

@@ -55,6 +55,38 @@ ACME_PROFILE = {
     "createdAt": "2026-08-29T09:24:11.412Z",
 }
 
+SOURCE_ID = "7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33"
+
+SOURCE_ITEM_ID = "2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42"
+
+HERIZON_SOURCE = {
+    "id": SOURCE_ID,
+    "slug": "herizon-io",
+    "name": "Herizon courses",
+    "url": "https://herizon.io/courses.xml",
+    "kind": "feed",
+    "resolvedUrl": None,
+    "profileId": None,
+    "connectionSlugs": ["herizon_linkedin"],
+    "mode": "queue",
+    "instructions": "",
+    "makeCard": True,
+    "status": "active",
+    "lastCheckedAt": None,
+    "nextCheckAt": "2026-10-27T10:00:00.000Z",
+    "lastError": None,
+    "itemCounts": {
+        "baseline": 3,
+        "new": 0,
+        "writing": 0,
+        "posted": 0,
+        "failed": 0,
+        "skipped": 0,
+    },
+    "pushUrl": None,
+    "createdAt": "2026-10-27T09:00:00.000Z",
+}
+
 KEY_ID = "9c4e1d75-6b3a-4f28-9d10-7e5c2a8b4f31"
 
 # Word for word what the API answers a scoped key that tries to manage keys, so
@@ -123,6 +155,7 @@ class StubHandler(BaseHTTPRequestHandler):
     do_GET = _handle
     do_POST = _handle
     do_PATCH = _handle
+    do_PUT = _handle
     do_DELETE = _handle
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -270,6 +303,257 @@ class YeetpostClientTest(unittest.TestCase):
         )
         self.assertEqual(response["connection"]["profileId"], None)
 
+    def test_update_connection_sets_the_voice_and_leaves_the_profile_alone(
+        self,
+    ) -> None:
+        voice = {"toneDescription": "dry and short", "examplePosts": ["shipped"]}
+        set_stub_response(
+            200,
+            {"connection": {**LINKEDIN_CONNECTION, "voice": voice, "look": None}},
+        )
+
+        response = self.client.update_connection(CONNECTION_ID, voice=voice)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "PATCH")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/connections/{CONNECTION_ID}"
+        )
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"voice": voice}
+        )
+        self.assertEqual(response["connection"]["voice"], voice)
+
+    def test_update_connection_sets_the_look_and_clears_the_voice(self) -> None:
+        look = {
+            "description": "warm and bold",
+            "exampleCards": [],
+            "logoMediaId": None,
+        }
+        set_stub_response(
+            200,
+            {"connection": {**LINKEDIN_CONNECTION, "voice": None, "look": look}},
+        )
+
+        self.client.update_connection(CONNECTION_ID, look=look, clear_voice=True)
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"look": look, "voice": None},
+        )
+
+    def test_update_connection_clears_the_look_with_an_explicit_null(self) -> None:
+        set_stub_response(200, {"connection": LINKEDIN_CONNECTION})
+
+        self.client.update_connection(CONNECTION_ID, clear_look=True)
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"look": None}
+        )
+
+    def test_update_connection_refuses_a_voice_and_clear_voice_together(
+        self,
+    ) -> None:
+        with self.assertRaises(ValueError):
+            self.client.update_connection(
+                CONNECTION_ID,
+                voice={"toneDescription": "dry", "examplePosts": []},
+                clear_voice=True,
+            )
+
+        self.assertEqual(RECORDED_REQUESTS, [])
+
+    def test_get_look_reads_the_account_look(self) -> None:
+        look = {
+            "description": "warm and bold",
+            "exampleCards": ["<div>card</div>"],
+            "logoMediaId": MEDIA_ID,
+        }
+        set_stub_response(200, {"look": look})
+
+        response = self.client.get_look()
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/look")
+        self.assertEqual(response["look"], look)
+
+    def test_get_look_answers_none_when_the_account_has_none(self) -> None:
+        set_stub_response(200, {"look": None})
+
+        response = self.client.get_look()
+
+        self.assertEqual(response["look"], None)
+
+    def test_update_look_puts_the_whole_look(self) -> None:
+        look = {
+            "description": "warm and bold",
+            "exampleCards": [],
+            "logoMediaId": None,
+        }
+        set_stub_response(200, {"look": look})
+
+        response = self.client.update_look(look)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "PUT")
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/look")
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"look": look}
+        )
+        self.assertEqual(response["look"], look)
+
+    def test_update_look_sends_an_explicit_null_to_clear_it(self) -> None:
+        set_stub_response(200, {"look": None})
+
+        response = self.client.update_look(None)
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"look": None}
+        )
+        self.assertEqual(response["look"], None)
+
+    def test_draft_look_from_url_posts_the_address_and_the_target(self) -> None:
+        set_stub_response(200, json.loads('''{"url":"https://brand.test/","applied":false,"target":null,"look":{"description":"Acme: a light, clean look.","exampleCards":["<p>a</p>","<p>b</p>"],"logoMediaId":null},"descriptionSource":"facts","facts":{"siteName":"Acme","title":"Acme","tagline":null,"themeColor":null,"colors":{"primary":"#c2410c","accent":null,"background":"#ffffff","text":null,"palette":[{"hex":"#c2410c","count":3}]},"fonts":{"heading":"Inter","body":"Inter","families":["Inter"],"googleFonts":[]},"logo":null,"hasInlineSvgLogo":true,"stylesheetsRead":1},"warnings":["The site's logo is an inline svg."]}'''))
+
+        response = self.client.draft_look_from_url(
+            "https://brand.test/", apply=True, account=True
+        )
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], "/api/v2/look/draft-from-url"
+        )
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"url": "https://brand.test/", "apply": True, "account": True},
+        )
+        self.assertEqual(response["descriptionSource"], "facts")
+        self.assertEqual(response["look"]["exampleCards"], ["<p>a</p>", "<p>b</p>"])
+
+    def test_render_image_posts_the_card_and_reads_the_stored_image(
+        self,
+    ) -> None:
+        set_stub_response(
+            200,
+            {
+                "mediaId": MEDIA_ID,
+                "contentType": "image/png",
+                "sizeBytes": 2048,
+                "width": 1200,
+                "height": 627,
+                "postId": POST_ID,
+                "rendersUsed": 13,
+                "rendersLimit": 300,
+            },
+        )
+
+        response = self.client.render_image(
+            "<div>card</div>",
+            preset="landscape",
+            format="png",
+            alt_text="a card",
+            post_id=POST_ID,
+        )
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/images/render")
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {
+                "html": "<div>card</div>",
+                "preset": "landscape",
+                "format": "png",
+                "altText": "a card",
+                "postId": POST_ID,
+            },
+        )
+        self.assertEqual(response["mediaId"], MEDIA_ID)
+        self.assertEqual(response["rendersUsed"], 13)
+
+    def test_render_image_sends_width_and_height_when_there_is_no_preset(
+        self,
+    ) -> None:
+        set_stub_response(
+            200,
+            {
+                "mediaId": MEDIA_ID,
+                "contentType": "image/jpeg",
+                "sizeBytes": 10,
+                "width": 800,
+                "height": 400,
+                "postId": None,
+                "rendersUsed": 1,
+                "rendersLimit": 300,
+            },
+        )
+
+        response = self.client.render_image("x", width=800, height=400)
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"html": "x", "width": 800, "height": 400},
+        )
+        self.assertEqual(response["postId"], None)
+
+    def test_render_image_past_the_allowance_raises(self) -> None:
+        set_stub_response(
+            429,
+            {
+                "error": "render_allowance_reached",
+                "message": "300 renders a month",
+            },
+        )
+
+        with self.assertRaises(YeetpostApiError) as raised:
+            self.client.render_image("x", preset="square")
+
+        self.assertEqual(raised.exception.status, 429)
+        self.assertEqual(raised.exception.code, "render_allowance_reached")
+
+    def test_update_connection_sends_an_empty_example_list_as_given(self) -> None:
+        set_stub_response(200, {"connection": LINKEDIN_CONNECTION})
+
+        self.client.update_connection(
+            CONNECTION_ID,
+            voice={"toneDescription": "x", "examplePosts": []},
+            look={"description": "bold", "exampleCards": [], "logoMediaId": None},
+        )
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {
+                "voice": {"toneDescription": "x", "examplePosts": []},
+                "look": {
+                    "description": "bold",
+                    "exampleCards": [],
+                    "logoMediaId": None,
+                },
+            },
+        )
+
+    def test_update_connection_moves_out_and_sets_the_voice_in_one_call(
+        self,
+    ) -> None:
+        set_stub_response(200, {"connection": LINKEDIN_CONNECTION})
+
+        self.client.update_connection(
+            CONNECTION_ID,
+            None,
+            voice={"toneDescription": "x", "examplePosts": []},
+        )
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {
+                "profileId": None,
+                "voice": {"toneDescription": "x", "examplePosts": []},
+            },
+        )
+
+    def test_update_connection_with_nothing_to_change_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self.client.update_connection(CONNECTION_ID)
+
+        self.assertEqual(RECORDED_REQUESTS, [])
+
     def test_moving_into_a_profile_that_holds_the_account_raises(self) -> None:
         set_stub_response(
             409,
@@ -414,6 +698,271 @@ class YeetpostClientTest(unittest.TestCase):
         self.client.list_profiles()
 
         self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/profiles")
+
+    def test_get_activity_puts_its_paging_in_the_query_string(self) -> None:
+        activity = {
+            "items": [
+                {
+                    "id": "evt_1",
+                    "at": "2026-10-20T09:00:00.000Z",
+                    "kind": "post_sent",
+                    "title": "Post sent",
+                    "detail": "Hello",
+                    "href": "/posts/1",
+                    "actor": "Mari",
+                }
+            ],
+            "cursor": "abc",
+            "refusedRequests": [],
+        }
+        set_stub_response(200, activity)
+
+        response = self.client.get_activity(limit=10, cursor="abc")
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], "/api/v2/activity?limit=10&cursor=abc"
+        )
+        self.assertEqual(response, activity)
+
+    def test_get_activity_sends_no_query_string_without_paging(self) -> None:
+        set_stub_response(
+            200, {"items": [], "cursor": None, "refusedRequests": []}
+        )
+
+        self.client.get_activity()
+
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/activity")
+
+    def test_preview_source_posts_the_url(self) -> None:
+        preview = {
+            "kind": "feed",
+            "name": "Herizon courses",
+            "resolvedUrl": None,
+            "itemCount": 0,
+            "items": [],
+        }
+        set_stub_response(200, preview)
+
+        response = self.client.preview_source("https://herizon.io/courses.xml")
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/sources/preview")
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"url": "https://herizon.io/courses.xml"},
+        )
+        self.assertEqual(response, preview)
+
+    def test_create_source_sends_what_it_is_given_and_leaves_out_the_rest(
+        self,
+    ) -> None:
+        set_stub_response(200, {"source": HERIZON_SOURCE})
+
+        response = self.client.create_source(
+            ["herizon_linkedin"],
+            "queue",
+            url="https://herizon.io/courses.xml",
+            instructions="one post per course",
+            backfill_count=2,
+        )
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/sources")
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {
+                "url": "https://herizon.io/courses.xml",
+                "connectionSlugs": ["herizon_linkedin"],
+                "mode": "queue",
+                "instructions": "one post per course",
+                "backfillCount": 2,
+            },
+        )
+        self.assertEqual(response, {"source": HERIZON_SOURCE})
+
+    def test_create_source_makes_a_push_source_with_kind_push(self) -> None:
+        set_stub_response(200, {"source": {**HERIZON_SOURCE, "kind": "push"}})
+
+        self.client.create_source(
+            ["herizon_linkedin"], "draft", kind="push", make_card=False
+        )
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {
+                "kind": "push",
+                "connectionSlugs": ["herizon_linkedin"],
+                "mode": "draft",
+                "makeCard": False,
+            },
+        )
+
+    def test_list_sources_puts_its_paging_in_the_query_string(self) -> None:
+        listing = {"sources": [HERIZON_SOURCE], "limit": 10, "offset": 5}
+        set_stub_response(200, listing)
+
+        response = self.client.list_sources(limit=10, offset=5)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], "/api/v2/sources?limit=10&offset=5"
+        )
+        self.assertEqual(response, listing)
+
+    def test_list_sources_sends_no_query_string_without_paging(self) -> None:
+        set_stub_response(200, {"sources": [], "limit": 25, "offset": 0})
+
+        self.client.list_sources()
+
+        self.assertEqual(RECORDED_REQUESTS[0]["path"], "/api/v2/sources")
+
+    def test_get_source_reads_one_source_by_id(self) -> None:
+        set_stub_response(200, {"source": HERIZON_SOURCE})
+
+        response = self.client.get_source(SOURCE_ID)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/sources/{SOURCE_ID}"
+        )
+        self.assertEqual(response, {"source": HERIZON_SOURCE})
+
+    def test_update_source_patches_only_what_it_is_given(self) -> None:
+        set_stub_response(
+            200, {"source": {**HERIZON_SOURCE, "status": "paused"}}
+        )
+
+        response = self.client.update_source(SOURCE_ID, status="paused")
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "PATCH")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/sources/{SOURCE_ID}"
+        )
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"status": "paused"}
+        )
+        self.assertEqual(response["source"]["status"], "paused")
+
+    def test_delete_source_deletes_by_id(self) -> None:
+        set_stub_response(200, {"id": SOURCE_ID, "deleted": True})
+
+        response = self.client.delete_source(SOURCE_ID)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "DELETE")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/sources/{SOURCE_ID}"
+        )
+        self.assertEqual(response, {"id": SOURCE_ID, "deleted": True})
+
+    def test_check_source_posts_to_the_check_path(self) -> None:
+        checked = {
+            "source": HERIZON_SOURCE,
+            "newItems": [
+                {
+                    "id": SOURCE_ITEM_ID,
+                    "title": "Leading without a title",
+                    "url": "https://herizon.io/courses/leading-without-a-title",
+                }
+            ],
+        }
+        set_stub_response(200, checked)
+
+        response = self.client.check_source(SOURCE_ID)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/sources/{SOURCE_ID}/check"
+        )
+        self.assertEqual(response, checked)
+
+    def test_list_source_items_sends_the_status_and_paging(self) -> None:
+        items = {"items": [], "limit": 10, "offset": 0}
+        set_stub_response(200, items)
+
+        response = self.client.list_source_items(
+            SOURCE_ID, status="failed", limit=10, offset=0
+        )
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"],
+            f"/api/v2/sources/{SOURCE_ID}/items?status=failed&limit=10&offset=0",
+        )
+        self.assertEqual(response, items)
+
+    def test_add_source_items_posts_the_items(self) -> None:
+        set_stub_response(200, {"added": 1, "duplicates": 0})
+        items = [
+            {
+                "id": "course-4",
+                "title": "Pricing your work",
+                "url": "https://herizon.io/courses/pricing-your-work",
+            }
+        ]
+
+        response = self.client.add_source_items(SOURCE_ID, items)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/sources/{SOURCE_ID}/items"
+        )
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]), {"items": items}
+        )
+        self.assertEqual(response, {"added": 1, "duplicates": 0})
+
+    def test_add_source_items_leaves_out_the_fields_that_are_none(self) -> None:
+        set_stub_response(200, {"added": 1, "duplicates": 0})
+
+        self.client.add_source_items(
+            SOURCE_ID,
+            [{"id": "course-4", "title": "Pricing", "url": None, "summary": None}],  # type: ignore[typeddict-item]
+        )
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"items": [{"id": "course-4", "title": "Pricing"}]},
+        )
+
+    def test_retry_source_item_posts_to_the_retry_path(self) -> None:
+        set_stub_response(200, {"id": SOURCE_ITEM_ID, "status": "new"})
+
+        response = self.client.retry_source_item(SOURCE_ID, SOURCE_ITEM_ID)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"],
+            f"/api/v2/sources/{SOURCE_ID}/items/{SOURCE_ITEM_ID}/retry",
+        )
+        self.assertEqual(response, {"id": SOURCE_ITEM_ID, "status": "new"})
+
+    def test_a_test_keys_403_on_sources_raises_an_api_error(self) -> None:
+        set_stub_response(
+            403,
+            {
+                "error": "forbidden",
+                "message": "Sources post to real connections, so they need a live API key. Test keys cannot use them.",
+            },
+        )
+
+        with self.assertRaises(YeetpostApiError) as raised:
+            self.client.list_sources()
+
+        self.assertEqual(raised.exception.status, 403)
+        self.assertEqual(raised.exception.code, "forbidden")
+
+    def test_create_connect_url_reconnects_without_a_redirect_url(
+        self,
+    ) -> None:
+        set_stub_response(200, CONNECT_SESSION)
+
+        self.client.create_connect_url(PROFILE_ID, connection_id=CONNECTION_ID)
+
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"connectionId": CONNECTION_ID},
+        )
 
     def test_get_profile_reads_one_profile(self) -> None:
         set_stub_response(200, {"profile": ACME_PROFILE})
@@ -1152,6 +1701,18 @@ class YeetpostClientTest(unittest.TestCase):
 
         self.assertEqual(response["contentType"], "image/png")
 
+    def test_list_media_puts_its_filters_in_the_query_string(self) -> None:
+        set_stub_response(200, {"media": [], "cursor": None})
+
+        response = self.client.list_media(connection_slug="linkedin", limit=10)
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "GET")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"],
+            "/api/v2/media?connectionSlug=linkedin&limit=10",
+        )
+        self.assertEqual(response, {"media": [], "cursor": None})
+
     def test_delete_media_sends_a_delete(self) -> None:
         set_stub_response(200, {"id": MEDIA_ID, "deleted": True})
 
@@ -1205,6 +1766,40 @@ class YeetpostClientTest(unittest.TestCase):
             "&platform=linkedin"
             f"&sendGroupId={PROFILE_ID}",
         )
+
+    def test_list_posts_sends_the_created_and_sort_filters(self) -> None:
+        set_stub_response(
+            200,
+            {
+                "posts": [],
+                "limit": 10,
+                "offset": 20,
+                "total": 31,
+                "hasMore": True,
+                "nextOffset": 30,
+            },
+        )
+
+        response = self.client.list_posts(
+            limit=10,
+            offset=20,
+            created_after="2026-09-01T00:00:00Z",
+            created_before="2026-09-30T00:00:00Z",
+            sort="created_asc",
+        )
+
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"],
+            "/api/v2/posts"
+            "?createdAfter=2026-09-01T00%3A00%3A00Z"
+            "&createdBefore=2026-09-30T00%3A00%3A00Z"
+            "&sort=created_asc"
+            "&limit=10"
+            "&offset=20",
+        )
+        self.assertEqual(response["total"], 31)
+        self.assertEqual(response["hasMore"], True)
+        self.assertEqual(response["nextOffset"], 30)
 
     def test_get_post_reads_media_thread_first_comment_and_published_at(
         self,
@@ -1763,6 +2358,29 @@ class YeetpostClientTest(unittest.TestCase):
             },
         )
 
+    def test_draw_card_posts_instructions_and_attach_to_the_card_path(
+        self,
+    ) -> None:
+        set_stub_response(
+            200, {"mediaId": POST_ID, "html": "<html></html>", "attached": True}
+        )
+
+        response = self.client.draw_card(
+            POST_ID, instructions="use a chart", attach=True
+        )
+
+        self.assertEqual(RECORDED_REQUESTS[0]["method"], "POST")
+        self.assertEqual(
+            RECORDED_REQUESTS[0]["path"], f"/api/v2/posts/{POST_ID}/card"
+        )
+        self.assertEqual(
+            json.loads(RECORDED_REQUESTS[0]["body"]),
+            {"instructions": "use a chart", "attach": True},
+        )
+        self.assertEqual(
+            response, {"mediaId": POST_ID, "html": "<html></html>", "attached": True}
+        )
+
     def test_retry_post_resends_a_failed_post(self) -> None:
         set_stub_response(200, {"id": POST_ID, "status": "sent"})
 
@@ -2052,9 +2670,9 @@ class YeetpostClientTest(unittest.TestCase):
         self,
     ) -> None:
         stats = {
-            "postsThisWeek": 100,
-            "postsAllTime": 1000,
-            "liveConnections": 10,
+            "postsThisWeek": 1284,
+            "postsAllTime": 48210,
+            "liveConnections": 391,
             "platformsLive": [
                 "linkedin",
                 "x",

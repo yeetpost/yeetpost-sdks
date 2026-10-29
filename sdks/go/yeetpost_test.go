@@ -599,6 +599,394 @@ func TestListProfilesSendsNoQueryStringWithoutPaging(t *testing.T) {
 	}
 }
 
+func TestGetActivityPutsItsPagingInTheQueryString(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"items":[{"id":"evt_1","at":"2026-10-20T09:00:00.000Z","kind":"post_sent","title":"Post sent","detail":"Hello","href":"/posts/1","actor":"Mari"}],"cursor":"abc","refusedRequests":[{"id":"r1","createdAt":"2026-10-19T09:00:00.000Z","errorCode":"invalid_connection","status":400,"apiKeyName":null,"textPreview":"Hi","responseMessage":null,"connectionSlug":"x","resolution":"open","connectionName":null,"connectionId":null}]}`)
+
+	response, err := newClient(stub).GetActivity(context.Background(), &GetActivityParams{Limit: 10, Cursor: "abc"})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	if request.url != "/api/v2/activity?cursor=abc&limit=10" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/activity?cursor=abc&limit=10")
+	}
+
+	if len(response.Items) != 1 || response.Items[0].Kind != "post_sent" {
+		t.Errorf("items: got %+v", response.Items)
+	}
+
+	if response.Cursor == nil || *response.Cursor != "abc" {
+		t.Errorf("cursor: got %v, want abc", response.Cursor)
+	}
+
+	if len(response.RefusedRequests) != 1 || response.RefusedRequests[0].Status != 400 || response.RefusedRequests[0].Resolution != "open" {
+		t.Errorf("refusedRequests: got %+v", response.RefusedRequests)
+	}
+}
+
+func TestGetActivitySendsNoQueryStringWithoutPaging(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"items":[],"cursor":null,"refusedRequests":[]}`)
+
+	response, err := newClient(stub).GetActivity(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.url != "/api/v2/activity" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/activity")
+	}
+
+	if response.Cursor != nil {
+		t.Errorf("cursor: got %v, want nil", response.Cursor)
+	}
+}
+
+const (
+	sourceID          = "7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33"
+	sourceItemID      = "2c9e4b1a-6d3f-4e58-b7a0-5f1d8c3e9a42"
+	herizonSourceJSON = `{"id":"7d1f0c52-3a8e-4d6b-9c41-0b2e5a9f1c33","slug":"herizon-io","name":"Herizon courses","url":"https://herizon.io/courses.xml","kind":"feed","resolvedUrl":null,"profileId":null,"connectionSlugs":["herizon_linkedin"],"mode":"queue","instructions":"","makeCard":true,"status":"active","lastCheckedAt":null,"nextCheckAt":"2026-10-27T10:00:00.000Z","lastError":null,"itemCounts":{"baseline":3,"new":0,"writing":0,"posted":0,"failed":0,"skipped":0},"pushUrl":null,"createdAt":"2026-10-27T09:00:00.000Z"}`
+)
+
+func TestPreviewSourcePostsTheURL(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"kind":"feed","name":"Herizon courses","resolvedUrl":null,"itemCount":1,"items":[{"title":"Negotiating your salary","url":"https://herizon.io/courses/negotiating-your-salary","summary":"A short line.","publishedAt":"2026-10-20T08:00:00.000Z"}]}`)
+
+	response, err := newClient(stub).PreviewSource(context.Background(), PreviewSourceParams{URL: "https://herizon.io/courses.xml"})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/sources/preview" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/sources/preview")
+	}
+
+	if request.body != `{"url":"https://herizon.io/courses.xml"}` {
+		t.Errorf("body: got %s", request.body)
+	}
+
+	if response.Kind != "feed" || response.ItemCount != 1 || response.ResolvedURL != nil {
+		t.Errorf("response: got %+v", response)
+	}
+
+	if len(response.Items) != 1 || response.Items[0].Title != "Negotiating your salary" || response.Items[0].URL == nil {
+		t.Errorf("items: got %+v", response.Items)
+	}
+}
+
+func TestCreateSourceSendsWhatItIsGivenAndLeavesOutTheRest(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"source":`+herizonSourceJSON+`}`)
+
+	response, err := newClient(stub).CreateSource(context.Background(), CreateSourceParams{
+		URL:             "https://herizon.io/courses.xml",
+		ConnectionSlugs: []string{"herizon_linkedin"},
+		Mode:            "queue",
+		Instructions:    "one post per course",
+		BackfillCount:   2,
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/sources" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/sources")
+	}
+
+	wantBody := `{"url":"https://herizon.io/courses.xml","connectionSlugs":["herizon_linkedin"],"mode":"queue","instructions":"one post per course","backfillCount":2}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	if response.Source.ID != sourceID || response.Source.ItemCounts.Baseline != 3 || response.Source.LastError != nil {
+		t.Errorf("source: got %+v", response.Source)
+	}
+}
+
+func TestCreateSourceMakesAPushSourceAndSendsMakeCardFalse(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"source":`+herizonSourceJSON+`}`)
+
+	_, err := newClient(stub).CreateSource(context.Background(), CreateSourceParams{
+		Kind:            "push",
+		ConnectionSlugs: []string{"herizon_linkedin"},
+		Mode:            "draft",
+		MakeCard:        boolPointer(false),
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+	wantBody := `{"kind":"push","connectionSlugs":["herizon_linkedin"],"mode":"draft","makeCard":false}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+}
+
+func TestListSourcesPutsItsPagingInTheQueryString(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"sources":[`+herizonSourceJSON+`],"limit":10,"offset":5}`)
+
+	response, err := newClient(stub).ListSources(context.Background(), &ListSourcesParams{Limit: 10, Offset: 5})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	if request.url != "/api/v2/sources?limit=10&offset=5" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/sources?limit=10&offset=5")
+	}
+
+	if len(response.Sources) != 1 || response.Limit != 10 || response.Offset != 5 {
+		t.Errorf("response: got %+v", response)
+	}
+}
+
+func TestListSourcesSendsNoQueryStringWithoutPaging(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"sources":[],"limit":25,"offset":0}`)
+
+	_, err := newClient(stub).ListSources(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.url != "/api/v2/sources" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/sources")
+	}
+}
+
+func TestGetSourceReadsOneSourceByID(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"source":`+herizonSourceJSON+`}`)
+
+	response, err := newClient(stub).GetSource(context.Background(), sourceID)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	if response.Source.Slug != "herizon-io" || response.Source.URL == nil || response.Source.Mode != "queue" {
+		t.Errorf("source: got %+v", response.Source)
+	}
+}
+
+func TestUpdateSourcePatchesOnlyWhatItIsGiven(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"source":`+herizonSourceJSON+`}`)
+
+	_, err := newClient(stub).UpdateSource(context.Background(), sourceID, UpdateSourceParams{Status: "paused", Instructions: stringPointer("")})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "PATCH" {
+		t.Errorf("method: got %q, want %q", request.method, "PATCH")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	wantBody := `{"instructions":"","status":"paused"}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+}
+
+func TestDeleteSourceDeletesByID(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"id":"`+sourceID+`","deleted":true}`)
+
+	response, err := newClient(stub).DeleteSource(context.Background(), sourceID)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "DELETE" {
+		t.Errorf("method: got %q, want %q", request.method, "DELETE")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	if response.ID != sourceID || !response.Deleted {
+		t.Errorf("response: got %+v", response)
+	}
+}
+
+func TestCheckSourcePostsToTheCheckPath(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"source":`+herizonSourceJSON+`,"newItems":[{"id":"`+sourceItemID+`","title":"Leading without a title","url":"https://herizon.io/courses/leading-without-a-title"}]}`)
+
+	response, err := newClient(stub).CheckSource(context.Background(), sourceID)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID+"/check" {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	if len(response.NewItems) != 1 || response.NewItems[0].ID != sourceItemID {
+		t.Errorf("newItems: got %+v", response.NewItems)
+	}
+}
+
+func TestListSourceItemsSendsTheStatusAndPaging(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"items":[{"id":"`+sourceItemID+`","title":"Leading without a title","url":null,"summary":"","publishedAt":null,"status":"failed","attempts":3,"error":{"code":"queue_full","message":"The queue is full."},"posts":[{"id":"6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10","connectionSlug":"herizon_linkedin","status":"scheduled","scheduledFor":"2026-10-28T10:00:00.000Z","url":null}],"createdAt":"2026-10-27T09:00:00.000Z"}],"limit":10,"offset":0}`)
+
+	response, err := newClient(stub).ListSourceItems(context.Background(), sourceID, &ListSourceItemsParams{Status: "failed", Limit: 10})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID+"/items?limit=10&status=failed" {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	if len(response.Items) != 1 || response.Items[0].Error == nil || response.Items[0].Error.Code != "queue_full" || len(response.Items[0].Posts) != 1 {
+		t.Errorf("items: got %+v", response.Items)
+	}
+}
+
+func TestAddSourceItemsPostsTheItems(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"added":1,"duplicates":0}`)
+
+	response, err := newClient(stub).AddSourceItems(context.Background(), sourceID, AddSourceItemsParams{
+		Items: []PushSourceItem{{ID: "course-4", Title: "Pricing your work", URL: "https://herizon.io/courses/pricing-your-work"}},
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID+"/items" {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	wantBody := `{"items":[{"id":"course-4","title":"Pricing your work","url":"https://herizon.io/courses/pricing-your-work"}]}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	if response.Added != 1 || response.Duplicates != 0 {
+		t.Errorf("response: got %+v", response)
+	}
+}
+
+func TestRetrySourceItemPostsToTheRetryPath(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"id":"`+sourceItemID+`","status":"new"}`)
+
+	response, err := newClient(stub).RetrySourceItem(context.Background(), sourceID, sourceItemID)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/sources/"+sourceID+"/items/"+sourceItemID+"/retry" {
+		t.Errorf("url: got %q", request.url)
+	}
+
+	if response.ID != sourceItemID || response.Status != "new" {
+		t.Errorf("response: got %+v", response)
+	}
+}
+
+func TestATestKeys403OnSourcesIsAnAPIError(t *testing.T) {
+	stub := newJSONStub(t, 403, `{"error":"forbidden","message":"Sources post to real connections, so they need a live API key. Test keys cannot use them."}`)
+
+	_, err := newClient(stub).ListSources(context.Background(), nil)
+
+	var apiError *APIError
+
+	if !errors.As(err, &apiError) {
+		t.Fatalf("err: got %v, want an *APIError", err)
+	}
+
+	if apiError.StatusCode != 403 || apiError.Code != "forbidden" {
+		t.Errorf("error: got %d %q, want 403 forbidden", apiError.StatusCode, apiError.Code)
+	}
+}
+
+func TestCreateConnectURLSendsAReconnectWithoutARedirectURL(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"url":"https://yeetpost.com/connect/tok","expiresAt":"2026-09-05T09:24:11.412Z","connectSessionId":"7f3c9a10-2b4d-4e88-9f01-3a5b7c9d1e2f"}`)
+
+	_, err := newClient(stub).CreateConnectURL(
+		context.Background(),
+		"b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b",
+		CreateConnectURLParams{ConnectionID: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+	wantBody := `{"connectionId":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %q, want %q", request.body, wantBody)
+	}
+}
+
 func TestGetProfileReturnsTheProfile(t *testing.T) {
 	stub := newJSONStub(t, 200, `{"profile":{"id":"b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b","name":"Acme Coffee","externalId":"cus_4821","createdAt":"2026-08-29T09:24:11.412Z"}}`)
 
@@ -2294,6 +2682,34 @@ func TestGetMediaKeepsOnlyTheMediaTypeWhenTheHeaderCarriesParameters(t *testing.
 	}
 }
 
+func TestListMediaPutsItsFiltersInTheQueryString(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"media":[],"cursor":null}`)
+
+	response, err := newClient(stub).ListMedia(context.Background(), &ListMediaParams{
+		ConnectionSlug: "linkedin",
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	wantURL := "/api/v2/media?connectionSlug=linkedin&limit=10"
+
+	if request.url != wantURL {
+		t.Errorf("url: got %q, want %q", request.url, wantURL)
+	}
+
+	if len(response.Media) != 0 || response.Cursor != nil {
+		t.Errorf("response: got %+v, want an empty last page", response)
+	}
+}
+
 func TestDeleteMediaSendsADelete(t *testing.T) {
 	stub := newJSONStub(t, 200, `{"id":"9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d","deleted":true}`)
 
@@ -2605,6 +3021,40 @@ func TestListPostsPutsTheSchedulingAndTargetingFiltersInTheQueryString(t *testin
 	}
 }
 
+func TestListPostsPutsTheCreatedSortAndPagingFiltersInTheQueryString(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"posts":[],"limit":10,"offset":20,"total":31,"hasMore":true,"nextOffset":30}`)
+
+	response, err := newClient(stub).ListPosts(context.Background(), ListPostsParams{
+		CreatedAfter:  "2026-09-01T00:00:00Z",
+		CreatedBefore: "2026-09-30T00:00:00Z",
+		Sort:          "created_asc",
+		Limit:         10,
+		Offset:        20,
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+	wantURL := "/api/v2/posts?createdAfter=2026-09-01T00%3A00%3A00Z&createdBefore=2026-09-30T00%3A00%3A00Z&limit=10&offset=20&sort=created_asc"
+
+	if request.url != wantURL {
+		t.Errorf("url: got %q, want %q", request.url, wantURL)
+	}
+
+	if response.Total != 31 {
+		t.Errorf("total: got %d, want 31", response.Total)
+	}
+
+	if !response.HasMore {
+		t.Errorf("hasMore: got false, want true")
+	}
+
+	if response.NextOffset == nil || *response.NextOffset != 30 {
+		t.Errorf("nextOffset: got %v, want 30", response.NextOffset)
+	}
+}
+
 func TestGetPostReturnsThePost(t *testing.T) {
 	stub := newJSONStub(t, 200, `{"post":{"id":"6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10","connectionSlug":"x","text":"shipped the new api docs today","status":"failed","url":null,"scheduledFor":null,"createdAt":"2026-08-26T09:24:11.412Z","tags":[],"platformPostId":null,"deletedAt":null,"error":{"code":"platform_rejected","message":"X: duplicate post was detected"}}}`)
 
@@ -2782,6 +3232,39 @@ func TestCancelPostIsTheOldNameOfDeletePost(t *testing.T) {
 	}
 
 	want := DeletePostResponse{ID: "6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10", Status: PostStatusCancelled}
+
+	if !reflect.DeepEqual(response, want) {
+		t.Errorf("response: got %+v, want %+v", response, want)
+	}
+}
+
+func TestDrawCardPostsInstructionsAndAttachToTheCardPath(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"mediaId":"0d6f5b3e-8a41-4c53-b6c2-5e0d9f1a7b22","html":"<html></html>","attached":true,"rendersUsed":12,"rendersLimit":300}`)
+
+	response, err := newClient(stub).DrawCard(context.Background(), "6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10", DrawCardParams{Instructions: "use a chart", Attach: true})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	wantURL := "/api/v2/posts/6f1b0c8a-1f3d-4d3e-9a2b-2f5a1c9e7d10/card"
+
+	if request.url != wantURL {
+		t.Errorf("url: got %q, want %q", request.url, wantURL)
+	}
+
+	wantBody := `{"instructions":"use a chart","attach":true}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	want := DrawCardResponse{MediaID: "0d6f5b3e-8a41-4c53-b6c2-5e0d9f1a7b22", HTML: "<html></html>", Attached: true, RendersUsed: 12, RendersLimit: 300}
 
 	if !reflect.DeepEqual(response, want) {
 		t.Errorf("response: got %+v, want %+v", response, want)
@@ -3158,7 +3641,7 @@ func TestGetHealthHistorySendsNoQueryStringWithoutAWindow(t *testing.T) {
 }
 
 func TestGetStatsReadsThePublicCountsWithoutAnApiKey(t *testing.T) {
-	stub := newJSONStub(t, 200, `{"postsThisWeek":100,"postsAllTime":1000,"liveConnections":10,"platformsLive":["linkedin","x","bluesky","mastodon","reddit","google_business"],"time":"2026-09-06T11:05:00.512Z"}`)
+	stub := newJSONStub(t, 200, `{"postsThisWeek":1284,"postsAllTime":48210,"liveConnections":391,"platformsLive":["linkedin","x","bluesky","mastodon","reddit","google_business"],"time":"2026-09-06T11:05:00.512Z"}`)
 
 	response, err := New("", WithBaseURL(stub.server.URL+"/api/v2")).GetStats(context.Background())
 	if err != nil {
@@ -3180,9 +3663,9 @@ func TestGetStatsReadsThePublicCountsWithoutAnApiKey(t *testing.T) {
 	}
 
 	want := GetStatsResponse{
-		PostsThisWeek:   100,
-		PostsAllTime:    1000,
-		LiveConnections: 10,
+		PostsThisWeek:   1284,
+		PostsAllTime:    48210,
+		LiveConnections: 391,
 		PlatformsLive:   []string{"linkedin", "x", "bluesky", "mastodon", "reddit", "google_business"},
 		Time:            "2026-09-06T11:05:00.512Z",
 	}
@@ -3794,5 +4277,441 @@ func TestParseWebhookEventRefusesABodyThatIsNotJson(t *testing.T) {
 
 	if !errors.As(err, &syntaxError) {
 		t.Errorf("err: got %v, want a wrapped json error", err)
+	}
+}
+
+func TestUpdateConnectionSetsTheVoiceAndLeavesTheProfileAlone(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b","slug":"linkedin","platformId":"linkedin","description":"Alex Doe (LinkedIn)","profileId":null,"timezone":"UTC","queueSlots":[],"voice":{"toneDescription":"dry and short","examplePosts":["shipped"]},"look":null}}`)
+
+	response, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{
+			Voice: &ConnectionVoice{
+				ToneDescription: "dry and short",
+				ExamplePosts:    []string{"shipped"},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "PATCH" {
+		t.Errorf("method: got %q, want %q", request.method, "PATCH")
+	}
+
+	wantBody := `{"voice":{"toneDescription":"dry and short","examplePosts":["shipped"]}}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	wantVoice := &ConnectionVoice{ToneDescription: "dry and short", ExamplePosts: []string{"shipped"}}
+
+	if !reflect.DeepEqual(response.Connection.Voice, wantVoice) {
+		t.Errorf("voice: got %+v, want %+v", response.Connection.Voice, wantVoice)
+	}
+}
+
+func TestUpdateConnectionSetsTheLookAndClearsTheVoice(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b","slug":"linkedin","platformId":"linkedin","description":"Alex Doe (LinkedIn)","profileId":null,"timezone":"UTC","queueSlots":[],"voice":null,"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null}}}`)
+
+	response, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{
+			Look:       &ConnectionLook{Description: "warm and bold", ExampleCards: []string{}},
+			ClearVoice: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+	wantBody := `{"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null},"voice":null}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	if response.Connection.Voice != nil {
+		t.Errorf("voice: got %+v, want nil", response.Connection.Voice)
+	}
+}
+
+func TestUpdateConnectionSendsAnExplicitNullToClearTheLook(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b","slug":"linkedin","platformId":"linkedin","description":"Alex Doe (LinkedIn)","profileId":null,"timezone":"UTC","queueSlots":[],"voice":null,"look":null}}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{ClearLook: true},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.body != `{"look":null}` {
+		t.Errorf("body: got %s, want %s", request.body, `{"look":null}`)
+	}
+}
+
+func TestGetLookReadsTheAccountLook(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"look":{"description":"warm and bold","exampleCards":["<div>card</div>"],"logoMediaId":"9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d"}}`)
+
+	response, err := newClient(stub).GetLook(context.Background())
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "GET" {
+		t.Errorf("method: got %q, want %q", request.method, "GET")
+	}
+
+	if request.url != "/api/v2/look" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/look")
+	}
+
+	want := GetLookResponse{
+		Look: &ConnectionLook{
+			Description:  "warm and bold",
+			ExampleCards: []string{"<div>card</div>"},
+			LogoMediaID:  stringPointer("9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d"),
+		},
+	}
+
+	if !reflect.DeepEqual(response, want) {
+		t.Errorf("response: got %+v, want %+v", response, want)
+	}
+}
+
+func TestGetLookAnswersNilWhenTheAccountHasNone(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"look":null}`)
+
+	response, err := newClient(stub).GetLook(context.Background())
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	if response.Look != nil {
+		t.Errorf("look: got %+v, want nil", response.Look)
+	}
+}
+
+func TestUpdateLookPutsTheWholeLook(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null}}`)
+
+	response, err := newClient(stub).UpdateLook(context.Background(), UpdateLookParams{
+		Look: &ConnectionLook{Description: "warm and bold", ExampleCards: []string{}},
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "PUT" {
+		t.Errorf("method: got %q, want %q", request.method, "PUT")
+	}
+
+	if request.url != "/api/v2/look" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/look")
+	}
+
+	wantBody := `{"look":{"description":"warm and bold","exampleCards":[],"logoMediaId":null}}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	want := UpdateLookResponse{
+		Look: &ConnectionLook{Description: "warm and bold", ExampleCards: []string{}},
+	}
+
+	if !reflect.DeepEqual(response, want) {
+		t.Errorf("response: got %+v, want %+v", response, want)
+	}
+}
+
+func TestUpdateLookSendsAnExplicitNullToClearIt(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"look":null}`)
+
+	response, err := newClient(stub).UpdateLook(context.Background(), UpdateLookParams{})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.body != `{"look":null}` {
+		t.Errorf("body: got %s, want %s", request.body, `{"look":null}`)
+	}
+
+	if response.Look != nil {
+		t.Errorf("look: got %+v, want nil", response.Look)
+	}
+}
+
+func TestDraftLookFromURLPostsTheAddressAndTheTarget(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"url":"https://brand.test/","applied":false,"target":null,"look":{"description":"Acme: a light, clean look.","exampleCards":["<p>a</p>","<p>b</p>"],"logoMediaId":null},"descriptionSource":"facts","facts":{"siteName":"Acme","title":"Acme","tagline":null,"themeColor":null,"colors":{"primary":"#c2410c","accent":null,"background":"#ffffff","text":null,"palette":[{"hex":"#c2410c","count":3}]},"fonts":{"heading":"Inter","body":"Inter","families":["Inter"],"googleFonts":[]},"logo":null,"hasInlineSvgLogo":true,"stylesheetsRead":1},"warnings":["The site's logo is an inline svg."]}`)
+
+	response, err := newClient(stub).DraftLookFromURL(context.Background(), DraftLookFromURLParams{
+		URL:     "https://brand.test/",
+		Apply:   true,
+		Account: true,
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/look/draft-from-url" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/look/draft-from-url")
+	}
+
+	wantBody := `{"url":"https://brand.test/","apply":true,"account":true}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	if response.DescriptionSource != "facts" {
+		t.Errorf("descriptionSource: got %q, want %q", response.DescriptionSource, "facts")
+	}
+
+	if !response.Facts.HasInlineSvgLogo {
+		t.Errorf("hasInlineSvgLogo: got false, want true")
+	}
+
+	if len(response.Look.ExampleCards) != 2 {
+		t.Errorf("exampleCards: got %d, want 2", len(response.Look.ExampleCards))
+	}
+}
+
+func TestRenderImagePostsTheCardAndReadsTheStoredImage(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"mediaId":"9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d","contentType":"image/png","sizeBytes":2048,"width":1200,"height":627,"postId":"b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b","rendersUsed":13,"rendersLimit":300}`)
+
+	response, err := newClient(stub).RenderImage(context.Background(), RenderImageParams{
+		HTML:    "a card",
+		Preset:  "landscape",
+		Format:  "png",
+		AltText: "a card",
+		PostID:  "b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b",
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+
+	if request.method != "POST" {
+		t.Errorf("method: got %q, want %q", request.method, "POST")
+	}
+
+	if request.url != "/api/v2/images/render" {
+		t.Errorf("url: got %q, want %q", request.url, "/api/v2/images/render")
+	}
+
+	wantBody := `{"html":"a card","preset":"landscape","format":"png","altText":"a card","postId":"b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b"}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	want := RenderImageResponse{
+		MediaID:      "9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d",
+		ContentType:  "image/png",
+		SizeBytes:    2048,
+		Width:        1200,
+		Height:       627,
+		PostID:       stringPointer("b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b"),
+		RendersUsed:  13,
+		RendersLimit: 300,
+	}
+
+	if !reflect.DeepEqual(response, want) {
+		t.Errorf("response: got %+v, want %+v", response, want)
+	}
+}
+
+func TestRenderImageSendsWidthAndHeightWhenThereIsNoPreset(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"mediaId":"9b1c2d3e-4f50-4a6b-8c7d-1e2f3a4b5c6d","contentType":"image/jpeg","sizeBytes":10,"width":800,"height":400,"postId":null,"rendersUsed":1,"rendersLimit":300}`)
+
+	response, err := newClient(stub).RenderImage(context.Background(), RenderImageParams{
+		HTML:   "x",
+		Width:  800,
+		Height: 400,
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	request := onlyRequest(t, stub)
+	wantBody := `{"html":"x","width":800,"height":400}`
+
+	if request.body != wantBody {
+		t.Errorf("body: got %s, want %s", request.body, wantBody)
+	}
+
+	if response.PostID != nil {
+		t.Errorf("postId: got %v, want nil", response.PostID)
+	}
+}
+
+func TestRenderImageAllowanceReachedIsAnApiError(t *testing.T) {
+	stub := newJSONStub(t, 429, `{"error":"render_allowance_reached","message":"300 renders a month"}`)
+
+	_, err := newClient(stub).RenderImage(context.Background(), RenderImageParams{HTML: "x", Preset: "square"})
+
+	var apiError *APIError
+
+	if !errors.As(err, &apiError) {
+		t.Fatalf("err: got %v, want an *APIError", err)
+	}
+
+	if apiError.StatusCode != 429 {
+		t.Errorf("status: got %d, want 429", apiError.StatusCode)
+	}
+
+	if apiError.Code != "render_allowance_reached" {
+		t.Errorf("code: got %q, want %q", apiError.Code, "render_allowance_reached")
+	}
+}
+
+func TestUpdateConnectionSendsAnEmptyListWhenTheVoiceHasNoExamples(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{Voice: &ConnectionVoice{ToneDescription: "x"}},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	wantBody := `{"voice":{"toneDescription":"x","examplePosts":[]}}`
+
+	if onlyRequest(t, stub).body != wantBody {
+		t.Errorf("body: got %s, want %s", onlyRequest(t, stub).body, wantBody)
+	}
+}
+
+func TestUpdateConnectionSendsAnEmptyListWhenTheLookHasNoCards(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{Look: &ConnectionLook{Description: "bold"}},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	wantBody := `{"look":{"description":"bold","exampleCards":[],"logoMediaId":null}}`
+
+	if onlyRequest(t, stub).body != wantBody {
+		t.Errorf("body: got %s, want %s", onlyRequest(t, stub).body, wantBody)
+	}
+}
+
+func TestUpdateLookSendsAnEmptyListWhenTheLookHasNoCards(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"look":null}`)
+
+	_, err := newClient(stub).UpdateLook(context.Background(), UpdateLookParams{
+		Look: &ConnectionLook{Description: "bold"},
+	})
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	wantBody := `{"look":{"description":"bold","exampleCards":[],"logoMediaId":null}}`
+
+	if onlyRequest(t, stub).body != wantBody {
+		t.Errorf("body: got %s, want %s", onlyRequest(t, stub).body, wantBody)
+	}
+}
+
+func TestUpdateConnectionRefusesAVoiceTogetherWithClearVoice(t *testing.T) {
+	stub := newJSONStub(t, 200, `{}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{Voice: &ConnectionVoice{ToneDescription: "x"}, ClearVoice: true},
+	)
+	if err == nil {
+		t.Fatalf("err: got nil, want an error")
+	}
+
+	if len(stub.requests) != 0 {
+		t.Errorf("requests: got %d, want 0", len(stub.requests))
+	}
+}
+
+func TestUpdateConnectionRefusesALookTogetherWithClearLook(t *testing.T) {
+	stub := newJSONStub(t, 200, `{}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{Look: &ConnectionLook{Description: "x"}, ClearLook: true},
+	)
+	if err == nil {
+		t.Fatalf("err: got nil, want an error")
+	}
+
+	if len(stub.requests) != 0 {
+		t.Errorf("requests: got %d, want 0", len(stub.requests))
+	}
+}
+
+func TestUpdateConnectionMovesOutAndSetsTheVoiceInOneCall(t *testing.T) {
+	stub := newJSONStub(t, 200, `{"connection":{"id":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{MoveOut: true, Voice: &ConnectionVoice{ToneDescription: "x", ExamplePosts: []string{}}},
+	)
+	if err != nil {
+		t.Fatalf("err: got %v, want nil", err)
+	}
+
+	wantBody := `{"profileId":null,"voice":{"toneDescription":"x","examplePosts":[]}}`
+
+	if onlyRequest(t, stub).body != wantBody {
+		t.Errorf("body: got %s, want %s", onlyRequest(t, stub).body, wantBody)
+	}
+}
+
+func TestUpdateConnectionRefusesAProfileIDTogetherWithMoveOut(t *testing.T) {
+	stub := newJSONStub(t, 200, `{}`)
+
+	_, err := newClient(stub).UpdateConnection(
+		context.Background(),
+		"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		UpdateConnectionParams{ProfileID: stringPointer("b2d1f0a3-5c6e-4f70-8a9b-0c1d2e3f4a5b"), MoveOut: true},
+	)
+	if err == nil {
+		t.Fatalf("err: got nil, want an error")
+	}
+
+	if len(stub.requests) != 0 {
+		t.Errorf("requests: got %d, want 0", len(stub.requests))
 	}
 }

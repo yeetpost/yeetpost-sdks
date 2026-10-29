@@ -9,8 +9,6 @@ Go 1.21 or newer.
 
 ## Install
 
-Not published yet. From this repo:
-
 ```bash
 go get github.com/yeetpost/yeetpost-sdks/sdks/go
 ```
@@ -117,6 +115,11 @@ post, err := client.GetPost(ctx, posts.Posts[0].ID)
 // post.Post.Status == yeetpost.PostStatusCancelled
 ```
 
+`ListPostsParams` also takes `CreatedAfter` and `CreatedBefore` (ISO 8601, read
+against `createdAt`, both inclusive) and `Sort` (`created_desc`, the default,
+`created_asc`, `scheduled_desc` or `scheduled_asc`). The answer carries `Total`,
+`HasMore` and `NextOffset`, a `*int` that is nil on the last page.
+
 `DeletePost` is one verb with three meanings, decided by what the post is, and
 `DeletePostResponse` folds all three shapes into one struct the way
 `LegacyPostResponse` already folds its three. A post still waiting is cancelled
@@ -182,6 +185,35 @@ _, err = client.CreatePosts(ctx, yeetpost.CreatePostsParams{
 `GetMedia` reads the bytes back and `DeleteMedia` frees the storage. Posts that
 used a deleted image keep their text and lose the image, so delete one only once
 the posts that need it have gone out.
+
+`RenderImage` makes the image for you: send HTML with inline CSS and a `Preset`
+(or `Width` and `Height`), and the answer is a `MediaID` to attach like any
+upload. 300 renders a month; past that it is a 429 `render_allowance_reached`.
+
+```go
+render, err := client.RenderImage(ctx, yeetpost.RenderImageParams{
+	HTML:   "<div style=\"font:700 64px sans-serif\">The new docs page</div>",
+	Preset: "landscape",
+})
+```
+
+## Voice and look
+
+`UpdateConnection` sets a connection's own tone of voice and look for image
+cards, and `ClearVoice` or `ClearLook` takes them off again so the connection
+falls back to the account's. `ProfileID` left nil still moves the connection
+back out to your own, unless a voice or look is in the same call, where
+`MoveOut: true` asks for the move. The account
+look is `GetLook` and `UpdateLook`; a nil `Look` on `UpdateLookParams` clears it.
+
+```go
+_, err = client.UpdateConnection(ctx, connectionID, yeetpost.UpdateConnectionParams{
+	Voice: &yeetpost.ConnectionVoice{ToneDescription: "dry and short", ExamplePosts: []string{"shipped"}},
+})
+_, err = client.UpdateLook(ctx, yeetpost.UpdateLookParams{
+	Look: &yeetpost.ConnectionLook{Description: "warm and bold", ExampleCards: []string{}},
+})
+```
 
 ## Threads and first comments
 
@@ -368,6 +400,50 @@ posts, err := client.ListPosts(ctx, yeetpost.ListPostsParams{
 })
 ```
 
+## Sources
+
+Paste a link and yeetpost posts what is new on it. A source watches a page that
+lists things (courses, a blog, a changelog), an RSS, Atom or JSON feed, or a
+sitemap, checks it every hour, and turns each new item into a post per
+connection, written in that connection's voice with a card in its look. Sources
+post for real, so every call needs a live key (a test key gets `403 forbidden`).
+
+```go
+// What would it find? Nothing is saved.
+preview, err := client.PreviewSource(ctx, yeetpost.PreviewSourceParams{
+	URL: "https://herizon.io/courses",
+})
+// preview.Kind is "feed", "json", "sitemap" or "page"; preview.Items the newest 5
+
+created, err := client.CreateSource(ctx, yeetpost.CreateSourceParams{
+	URL:             "https://herizon.io/courses",
+	ConnectionSlugs: []string{"herizon_linkedin"},
+	Mode:            "queue", // or "draft" to review every post first
+	Instructions:    "one post per course, say it is free for members",
+	BackfillCount:   0, // post none of what is already there
+})
+
+sourceID := created.Source.ID
+
+_, err = client.CheckSource(ctx, sourceID) // now, instead of in the next hour
+items, err := client.ListSourceItems(ctx, sourceID, &yeetpost.ListSourceItemsParams{Status: "failed"})
+_, err = client.RetrySourceItem(ctx, sourceID, items.Items[0].ID)
+_, err = client.UpdateSource(ctx, sourceID, yeetpost.UpdateSourceParams{Status: "paused"})
+_, err = client.DeleteSource(ctx, sourceID) // the posts it made are not touched
+```
+
+An app that knows what is new the moment it happens makes a push source with
+`Kind: "push"` instead of `URL`, and sends items to it:
+
+```go
+result, err := client.AddSourceItems(ctx, sourceID, yeetpost.AddSourceItemsParams{
+	Items: []yeetpost.PushSourceItem{
+		{ID: "course-4", Title: "Pricing your work", URL: "https://herizon.io/courses/pricing-your-work"},
+	},
+})
+// result.Added is 1; an id sent twice counts as a duplicate and is never posted twice
+```
+
 ## Idempotency
 
 Network calls fail halfway. Pass a key and a retry cannot double-post: same key
@@ -428,7 +504,7 @@ takes the yeetpost header and footer off the page so it can sit inside a popup
 with your own branding around it: a popup rather than an iframe, because the
 platforms' own consent screens refuse to be framed.
 
-`RedirectURL` must be an https URL on a public host with no fragment; plain http
+`RedirectURL` is optional: without it the customer finishes on a yeetpost "connected, you can close this tab" page and the link lasts 7 days instead of 15 minutes. `ConnectionID` reconnects an existing connection instead of adding one: the connection keeps its id and slug if the customer signs in to the same account, and a different account becomes a new connection. When given, `RedirectURL` must be an https URL on a public host with no fragment; plain http
 is accepted for `localhost` and `127.0.0.1`. It is bound to the session here and
 used exactly as stored, so nothing your customer's browser sends can change
 where they land.
@@ -686,9 +762,7 @@ Codes are the API's own vocabulary: `invalid_request`, `invalid_connection`,
 `missed_schedule` never come back from a call you made directly: they only
 show up in a stored post's own error (`ListPosts`, a webhook).
 `platform_unavailable` means the platform answered 429 or 5xx so nothing was
-sent, safe to send again. `platform_timeout` is Discord only: its own message
-POST timed out, so the message may already have posted and the fix is to
-check the channel before sending it again.
+sent, safe to send again. `platform_timeout` is no longer returned: when Discord is slow to answer the message POST the post counts as sent, without a message id. It stays in the vocabulary for older stored posts.
 
 `RequestID` is the `x-request-id` header, the same value the body carries as
 `req_id` on `platform_rejected`, `internal_server_error`,
@@ -913,6 +987,9 @@ stats, err := yeetpost.New("").GetStats(ctx)
 | `ListConnections(ctx, params)`                      | `GET /connections`                                          |
 | `GetConnection(ctx, connectionID)`                  | `GET /connections/{connectionId}`                           |
 | `UpdateConnection(ctx, connectionID, params)`       | `PATCH /connections/{connectionId}`                         |
+| `GetLook(ctx)`                                      | `GET /look`                                                 |
+| `UpdateLook(ctx, params)`                           | `PUT /look`                                                 |
+| `DraftLookFromURL(ctx, params)`                     | `POST /look/draft-from-url`                                 |
 | `DeleteConnection(ctx, connectionID)`               | `DELETE /connections/{connectionId}`                        |
 | `ListConnectionQueue(ctx, connectionID)`            | `GET /connections/{connectionId}/queue`                     |
 | `UpdateConnectionQueue(ctx, connectionID, params)`  | `PATCH /connections/{connectionId}/queue`                   |
@@ -937,9 +1014,11 @@ stats, err := yeetpost.New("").GetStats(ctx)
 | `DeletePost(ctx, postID)`                           | `DELETE /posts/{postId}`                                    |
 | `CancelPost(ctx, postID)`                           | `DELETE /posts/{postId}`                                    |
 | `RetryPost(ctx, postID)`                            | `POST /posts/{postId}/retry`                                |
+| `DrawCard(ctx, postID, params)`                     | `POST /posts/{postId}/card`                                 |
 | `GetPostMetrics(ctx, postID)`                       | `GET /posts/{postId}/metrics`                               |
 | `GetAnalytics(ctx, params)`                         | `GET /analytics`                                            |
 | `UploadMedia(ctx, params)`                          | `POST /media`                                               |
+| `RenderImage(ctx, params)`                          | `POST /images/render`                                       |
 | `GetMedia(ctx, mediaID)`                            | `GET /media/{mediaId}`                                      |
 | `DeleteMedia(ctx, mediaID)`                         | `DELETE /media/{mediaId}`                                   |
 | n/a (fetch the signed url directly)                 | `GET /media/{mediaId}/raw`                                  |
@@ -952,6 +1031,18 @@ stats, err := yeetpost.New("").GetStats(ctx)
 | `GetHealth(ctx)`                                    | `GET /health`                                               |
 | `GetHealthHistory(ctx, params)`                     | `GET /health/history`                                       |
 | `GetStats(ctx)`                                     | `GET /stats`                                                |
+| `GetMe(ctx)`                                        | `GET /me`                                                   |
+| `GetActivity(ctx, params)`                          | `GET /activity`                                             |
+| `PreviewSource(ctx, params)`                        | `POST /sources/preview`                                     |
+| `CreateSource(ctx, params)`                         | `POST /sources`                                             |
+| `ListSources(ctx, params)`                          | `GET /sources`                                              |
+| `GetSource(ctx, sourceID)`                          | `GET /sources/{sourceId}`                                   |
+| `UpdateSource(ctx, sourceID, params)`               | `PATCH /sources/{sourceId}`                                 |
+| `DeleteSource(ctx, sourceID)`                       | `DELETE /sources/{sourceId}`                                |
+| `CheckSource(ctx, sourceID)`                        | `POST /sources/{sourceId}/check`                            |
+| `ListSourceItems(ctx, sourceID, params)`            | `GET /sources/{sourceId}/items`                             |
+| `AddSourceItems(ctx, sourceID, params)`             | `POST /sources/{sourceId}/items`                            |
+| `RetrySourceItem(ctx, sourceID, itemID)`            | `POST /sources/{sourceId}/items/{itemId}/retry`             |
 | `GetOpenapiSpec(ctx)`                               | `GET /openapi.json`                                         |
 | `VerifyWebhookSignature(secret, header, body, ...)` | n/a                                                         |
 | `ParseWebhookEvent(body)`                           | n/a                                                         |
