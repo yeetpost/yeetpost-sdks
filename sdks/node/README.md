@@ -894,7 +894,7 @@ Codes are the API's own vocabulary: `invalid_request`, `invalid_connection`,
 `missed_schedule` never come back from a call you made directly: they only
 show up in a stored post's own `error` (`GET /posts`, a webhook).
 `platform_unavailable` means the platform answered 429 or 5xx so nothing was
-sent, safe to send again. `platform_timeout` is no longer returned: when Discord is slow to answer the message POST the post counts as sent, without a message id. It stays in the vocabulary for older stored posts.
+sent, safe to send again. `platform_timeout` means a Discord image upload got no answer in time: the message may still have posted, so check the channel before sending it again. When Discord is slow to answer a text-only post, it counts as sent, without a message id.
 
 `requestId` is the `x-request-id` header, and the `req_id` the body carries on
 `platform_rejected`, `internal_server_error`, `platform_unavailable` and

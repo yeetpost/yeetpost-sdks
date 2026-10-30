@@ -179,7 +179,6 @@ const (
 	ConnectPlatformFacebook       ConnectPlatform = "facebook"
 	ConnectPlatformInstagram      ConnectPlatform = "instagram"
 	ConnectPlatformThreads        ConnectPlatform = "threads"
-	ConnectPlatformGoogleBusiness ConnectPlatform = "google_business"
 )
 
 // ConnectSessionStatus is where a connect link stands. Pending is a customer

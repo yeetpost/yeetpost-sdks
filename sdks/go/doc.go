@@ -1,6 +1,5 @@
 // Package yeetpost is a client for the yeetpost API: post to LinkedIn, X,
-// Bluesky, Discord, Telegram, Mastodon, Reddit, Facebook, Instagram, Threads
-// and Google Business Profile from one HTTP call.
+// Bluesky, Discord, Telegram and Mastodon from one HTTP call.
 //
 // It is hand-written against yeetpost-api/src/lib/openapi.json and uses nothing
 // outside the standard library. The response structs are copies of the schemas

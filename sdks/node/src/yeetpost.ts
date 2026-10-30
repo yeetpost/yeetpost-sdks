@@ -445,8 +445,7 @@ export type ConnectPlatform =
   | "reddit"
   | "facebook"
   | "instagram"
-  | "threads"
-  | "google_business";
+  | "threads";
 
 export interface CreateConnectSessionResponse {
   // The page to send your end customer to. It carries a single use token, and
@@ -496,6 +495,7 @@ export type LegacyPostResponse =
         | "discord"
         | "telegram"
         | "mastodon"
+        | "sandbox"
         | "reddit"
         | "facebook"
         | "instagram"

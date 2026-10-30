@@ -304,7 +304,6 @@ ConnectPlatform = Literal[
     "facebook",
     "instagram",
     "threads",
-    "google_business",
 ]
 
 
@@ -385,6 +384,7 @@ class LegacyLinkPostResponse(TypedDict):
         "discord",
         "telegram",
         "mastodon",
+        "sandbox",
         "reddit",
         "facebook",
         "instagram",
